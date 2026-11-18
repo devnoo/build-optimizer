@@ -1,6 +1,6 @@
 ---
 name: optimize-build
-description: Make a project's build and CI faster — measure where pipeline time goes, rank the hotspots, then audit only those — caching, test parallelism, test cost, install, compile, typecheck and lint, Docker and pipeline topology. Covers Node/TypeScript, Go, Rust, Python and JVM (Gradle, Maven); GitHub Actions first, other CIs via an adapter. Use when CI or the build is slow, tests take too long, or the user wants to cut build time or CI cost.
+description: Speed up CI pipelines and local builds — measure where the time goes (CI run history or local timing runs), rank the hotspots, then audit only those — caching, test parallelism, slow tests, install, compile, typecheck and lint, Docker and pipeline topology. Covers Node/TypeScript, Go, Rust, Python and JVM (Gradle, Maven); GitHub Actions first, other CIs via an adapter. Use when CI is slow, the local build or test run is slow, or the user wants to cut build time or CI cost.
 license: MIT
 ---
 

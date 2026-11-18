@@ -1,6 +1,6 @@
 # build-optimizer
 
-An agent skill that makes a project's build and CI faster. It measures where pipeline time goes first, then audits only the steps that matter.
+An agent skill that speeds up **CI pipelines and local builds**. It measures where the time goes first (CI run history, or timed local runs), then audits only the steps that matter.
 
 [![skills.sh](https://skills.sh/b/devnoo/build-optimizer)](https://skills.sh/devnoo/build-optimizer)
 
