@@ -33,6 +33,17 @@ Checked 2026-11-18. Latest that day: Go **1.27.4** (1.26.11 still supported), `a
 9. **Compiling the same packages in several jobs.** **Fact** (local, `go help cache`): one `GOCACHE` serves `go build`, `go vet` and `go test`, and is "safe for concurrent invocations". **Check**: separate build, vet and test jobs, each starting from a cold or frozen cache. **Fix**: one job that runs them in sequence shares the compile work; or give all jobs the same restored cache (check 1). For a `GOOS`/`GOARCH` build matrix without cgo, cross-compile on one Linux runner instead of one runner per OS. **Gain**: one full compile per removed job (heuristic). **Risk**: a longer single job. Compare the new critical path first (`build-steps.md` §8).
 10. **Module download.** **Check**: a `go mod download` step, or a long first `go` command, with `Cache is not found` in the setup-go log. `GOFLAGS=-mod=mod` or `GOPROXY=direct` forces VCS fetches. **Fix**: the cache from check 1. For private modules, a proxy instead of `direct`. **Gain**: the download time (heuristic). **Risk**: none.
 
+## Profile one slow test
+Use this when Measure names a test whose own run time dominates: not the compile, not a result-cache miss. Work in a scratch copy and write every output outside the repo. All commands below were run on go1.27.3 (local).
+1. **Isolate it.** `go test -run '^TestName$' -count=1 -v ./path/to/pkg` prints `--- PASS: TestName (1.23s)`. Profile flags work on one package only; with several, go stops with `cannot use -cpuprofile flag with multiple packages`.
+2. **CPU profile.** `go test -run '^TestName$' -count=1 -cpuprofile /tmp/cpu.out -o /tmp/pkg.test ./path/to/pkg`, then `go tool pprof -top -nodecount=20 /tmp/pkg.test /tmp/cpu.out`. The flag "Writes test binary as -c would", so `-o` keeps that binary out of the repo.
+3. **Computing or waiting?** Read the pprof header: `Duration: 303ms, Total samples = 90ms (29.67%)`. A low percentage means the test mostly waited (sleep, I/O, locks, network), and a CPU profile will not explain it. A sleeping test showed `Total samples = 0`.
+4. **Waiting.** Add `-blockprofile /tmp/block.out` or `-mutexprofile /tmp/mutex.out` and read them with the same pprof command. Or record `-trace /tmp/trace.out` and export a blocking profile without the browser UI: `go tool trace -pprof=sync /tmp/trace.out > /tmp/sync.pprof` (types: `net`, `sync`, `syscall`, `sched`), then `go tool pprof -top /tmp/sync.pprof`.
+5. **Allocations.** `-memprofile /tmp/mem.out`, then `go tool pprof -sample_index=alloc_space -top /tmp/pkg.test /tmp/mem.out`.
+6. **Hangs.** `-timeout 60s` (the default is 10 minutes) makes go panic with `test timed out`, the list of `running tests`, and every goroutine's stack and wait reason, e.g. `goroutine 3 [sync.Mutex.Lock]` with the test's file and line.
+
+Report the top frames and their share of the test's time. That output is the evidence for the finding.
+
 ## Cache paths
 | Cache | Path | Key inputs | Notes |
 |---|---|---|---|
@@ -51,3 +62,4 @@ Checked 2026-11-18. Latest that day: Go **1.27.4** (1.26.11 still supported), `a
 - Go: `go help cache`, `go help test`, `go help testflag`, `go help build` (go1.27.3), [cmd/go](https://pkg.go.dev/cmd/go), [test.go @ go1.27.4](https://github.com/golang/go/blob/go1.27.4/src/cmd/go/internal/test/test.go), [cache.go @ go1.27.4](https://github.com/golang/go/blob/go1.27.4/src/cmd/go/internal/cache/cache.go), [race detector](https://go.dev/doc/articles/race_detector)
 - Actions: [setup-go](https://github.com/actions/setup-go), [setup-go advanced usage](https://github.com/actions/setup-go/blob/main/docs/advanced-usage.md), [golangci-lint-action](https://github.com/golangci/golangci-lint-action)
 - Tools: [gotestsum](https://github.com/gotestyourself/gotestsum), [golangci-lint](https://golangci-lint.run/)
+- Profiling: `go help testflag`, `go tool trace -h` (go1.27.3), [pprof](https://pkg.go.dev/cmd/pprof), [trace](https://pkg.go.dev/cmd/trace), [diagnostics](https://go.dev/doc/diagnostics)

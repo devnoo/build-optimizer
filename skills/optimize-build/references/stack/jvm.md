@@ -24,6 +24,17 @@ Checked 2026-11-18. Latest that day: JUnit **6.1.3**, Spring Framework **7.0.10*
 6. **Real waits.** **Check**: the `Thread.sleep` count in `src/test`, and tests whose duration is a round multiple of a second. **Fix**: poll with a timeout (Awaitility), or inject a clock. **Gain**: the summed sleep time (arithmetic). **Risk**: none.
 7. **Context does more work than the test needs.** **Check**: `@SpringBootTest` on tests that exercise one controller or repository. **Fix**: a test slice (`@WebMvcTest`, `@DataJpaTest`) starts fewer beans, and `spring.main.lazy-initialization=true` in the test profile defers beans the test never touches. **Gain**: read the new startup seconds from the log (heuristic). **Risk**: every distinct slice is another cached context (check 1), so measure the suite total, not one class. Lazy initialization hides wiring errors; keep one full-context test without it.
 
+## Profile one slow test
+Use this when a class is slow after the startup costs above are ruled out: the context, containers and forks are already accounted for and the test bodies themselves take the time. Work in a scratch copy and write recordings outside the repo. Nothing here was run locally; the commands come from the linked docs.
+1. **Isolate it.** Maven: `mvn -Dtest='FooTest#slowMethod' test` ([single test](https://maven.apache.org/surefire/maven-surefire-plugin/examples/single-test.html)). Gradle: `./gradlew test --tests 'com.example.FooTest.slowMethod'` ([testing](https://docs.gradle.org/current/userguide/java_testing.html)). Confirm the `Tests run:` count is what you selected.
+2. **Record it with JFR.** The test runs in a forked JVM, so the flag must reach that fork. Without editing build files: `JAVA_TOOL_OPTIONS='-XX:StartFlightRecording:filename=/tmp/jfr/,settings=profile,dumponexit=true'`. Create `/tmp/jfr` first. Every JVM the build starts picks the option up, and with a directory as `filename` each one writes its own file named after its PID. Maven alternative: `-DargLine='-XX:StartFlightRecording:…'`, unless the pom sets `<argLine>` itself. `profile.jfc` "provides more data than the default configuration, but can have more overhead"; use it "for short periods" ([java](https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html)).
+3. **Read it.** Pick the largest recording (the test worker). `jfr summary rec.jfr` lists event counts. `jfr view all-views rec.jfr` prints every built-in view, and `jfr --help view` lists their names; start with the hot-methods and contention views (names vary by JDK version). For raw samples: `jfr print --events jdk.ExecutionSample --stack-depth 20 rec.jfr` ([jfr](https://docs.oracle.com/en/java/javase/25/docs/specs/man/jfr.html)).
+4. **Computing or waiting?** Few execution samples against a long wall time means the test waits. Look at the contention, park, sleep and socket events in the same recording, and at check 6 (real waits).
+5. **Hangs.** JUnit: `junit.jupiter.execution.timeout.default=60s` plus `junit.jupiter.execution.timeout.threaddump.enabled=true` dumps all thread stacks when a test times out ([timeouts](https://docs.junit.org/6.1.3/writing-tests/timeouts.html)). For a JVM that is already stuck: `jcmd <pid> Thread.print`.
+6. **A flame graph instead.** [async-profiler](https://github.com/async-profiler/async-profiler) attaches as an agent and has a wall-clock mode. Use it when JFR's views are not enough (heuristic).
+
+Report the top frames and their share of the test's time. That output is the evidence for the finding.
+
 ## Cache paths
 None on disk. The caches here live inside the test JVM (Spring contexts, started containers), which is why fork settings decide whether they work.
 
@@ -35,4 +46,5 @@ None on disk. The caches here live inside the test JVM (Spring contexts, started
 ## Sources
 - Spring: [context caching](https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/ctx-management/caching.html)
 - Testcontainers: [manual lifecycle control](https://java.testcontainers.org/test_framework_integration/manual_lifecycle_control/)
+- Profiling: [java launcher](https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html), [jfr tool](https://docs.oracle.com/en/java/javase/25/docs/specs/man/jfr.html), [JUnit timeouts](https://docs.junit.org/6.1.3/writing-tests/timeouts.html), [Surefire single test](https://maven.apache.org/surefire/maven-surefire-plugin/examples/single-test.html), [async-profiler](https://github.com/async-profiler/async-profiler)
 - Build tools: [Gradle performance](https://docs.gradle.org/current/userguide/performance.html), [Surefire forks](https://maven.apache.org/surefire/maven-surefire-plugin/examples/fork-options-and-parallel-execution.html)

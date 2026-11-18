@@ -36,6 +36,8 @@ You get one report: a time budget per workflow, job and step, then findings rank
 | Docker | `docker` | layer order, cache backends, multi-arch |
 | Any | lane references | cache keys and scope, test parallelism and sharding, pipeline topology, wasted runs |
 
+Long-running tests are part of the test lane: the skill ranks them, then profiles the worst ones one at a time (pprof, pyinstrument, JFR, samply, Vitest CPU profiles) to say whether a test is computing or waiting.
+
 Timings come from GitHub Actions. Other CIs plug in through the adapter contract in [`ci-github-timings.md`](skills/optimize-build/references/ci-github-timings.md) §10; without CI access the skill times the pipeline's commands locally.
 
 ## Requirements

@@ -91,7 +91,10 @@ const LANE_ASK = {
 5. Result reuse: does the runner have a result cache (go test, Gradle, Nx/Turbo, the Maven build cache),
    and do unchanged packages or modules hit it in CI? If not, what busts the key?
 6. Sharding: would splitting this job across runners shorten the critical path after per-job setup cost?
-   Can shards reuse one build (an artifact or archive) instead of each compiling?`,
+   Can shards reuse one build (an artifact or archive) instead of each compiling?
+7. Long-running tests: when a few tests hold a large share of the run time after 2 and 3 are accounted
+   for, name each one, its seconds, and what you expect it spends them on (computing, or waiting on
+   sleeps, I/O, locks, network). One finding per test, with the test id in the title.`,
   cache: `Audit every cache in every workflow, not only the hotspots: missing caches for install, tool
 caches (tsbuildinfo, eslint, turbo/nx, next, playwright browsers, docker layers, Go build cache, Cargo
 target, Gradle User Home, ~/.m2, uv/pip, mypy), built-in setup-* caches with no restore keys, mis-keyed caches
@@ -182,6 +185,9 @@ repository whether it was a worktree or a clone. Start any service the step need
 Postgres container on a free port) and stop it afterwards. Other skeptics share this machine, so compare
 before vs after back-to-back with the same command (≥ 2 runs each, interleaved) and report the relative
 change. Never push, commit, or touch CI settings.
+A finding about one long-running test survives only with a profile: run that test alone in the scratch copy
+with the stack reference's "Profile one slow test" section (JS/TS: test-environment.md §1), write the output
+outside the copy, and put the top frames and their share of the test's time in \`measured\`.
 Reference: ${refsFor(h.lane).join(', ')}.
 FINDINGS:
 ${JSON.stringify(res.findings, null, 2)}`,

@@ -1,7 +1,7 @@
 # rust — optimize-build stack reference
 Use when: detect-stack.sh reported `rust`. Lanes: install, build, typecheck-lint, test, cache.
 
-Checked 2026-11-18. Latest that day: Rust **1.100.0** (2026-11-12), `Swatinem/rust-cache` **v2.9.3**, sccache **0.19.0**, cargo-nextest **0.9.152**, `taiki-e/install-action` **v2.90.5**. **(cited)** means linked vendor text; vendor benchmarks are not independent. **(heuristic)** means typical but unmeasured, so measure it on the repo. No Rust toolchain was available for local runs, so nothing here is marked local.
+Checked 2026-11-18. Latest that day: Rust **1.100.0** (2026-11-12), `Swatinem/rust-cache` **v2.9.3**, sccache **0.19.0**, cargo-nextest **0.9.152**, `taiki-e/install-action` **v2.90.5**, samply **0.13.1**, flamegraph **0.6.15**. **(cited)** means linked vendor text; vendor benchmarks are not independent. **(heuristic)** means typical but unmeasured, so measure it on the repo. No Rust toolchain was available for local runs, so nothing here is marked local.
 
 ## Measure
 - **Which commands run:**
@@ -35,6 +35,17 @@ Checked 2026-11-18. Latest that day: Rust **1.100.0** (2026-11-12), `Swatinem/ru
 12. **Release settings on PR jobs.** **Check**: `--release` on PR test jobs with `lto` or `codegen-units = 1` in `[profile.release]`. **Fix**: test on the dev profile in PRs, or add a `[profile.ci]` that inherits `release` with `lto = false` and the default `codegen-units`. Build the real release profile on the default branch and tags. **Gain**: read it from `--timings` (heuristic). **Risk**: slow tests at `opt-level = 0`; `[profile.dev.package."*"] opt-level = 2` optimises dependencies only, and that build is cached.
 13. **Docker.** **Check**: `COPY . .` before `cargo build` in a Dockerfile. Every source change rebuilds all dependencies. **Fix**: cargo-chef: `cargo chef prepare --recipe-path recipe.json` in a planner stage, `cargo chef cook --release --recipe-path recipe.json` as its own layer, then the build ([cargo-chef](https://github.com/LukeMathWalker/cargo-chef)). The layer cache must be exported for this to help on hosted runners ([docker.md](docker.md) check 4). **Gain**: the dependency build on source-only changes (heuristic). **Risk**: the cook and build flags must match exactly.
 
+## Profile one slow test
+Use this when a test's own run time dominates: not the compile (`cargo test --no-run`) and not the link (checks 6–7). Work in a scratch copy and write every output outside the repo. Nothing here was run locally; the commands come from the linked docs.
+1. **Find it.** nextest prints a duration per test and a `SLOW [> 60.000s]` line once a test passes the slow threshold, 60 seconds by default. In `.config/nextest.toml`, `slow-timeout = { period = "30s", terminate-after = 4 }` lowers the threshold and ends the test as `TIMEOUT` after four periods ([slow tests](https://nexte.st/docs/features/slow-tests/)).
+2. **Isolate it.** `cargo test --no-run` prints the path of each test executable. Run one directly: `target/debug/deps/<crate>-<hash> --exact module::test_name --test-threads=1 --nocapture`.
+3. **Profile the binary.** `samply record target/debug/deps/<crate>-<hash> --exact module::test_name` (samply 0.13.1). "On macOS and Windows, both on- and off-cpu samples are collected (so you can see under which stack you were blocking on a lock, for example). On Linux, only on-cpu samples are collected". Linux also needs perf events enabled for unprivileged users ([samply](https://github.com/mstange/samply)).
+4. **Or a flame graph.** `cargo flamegraph --dev --unit-test <crate> -- module::test_name`, or `--test <integration test> -- test_name` (flamegraph 0.6.15). Without the trailing filter it "profiles the test harness and all tests in the binary". `--dev` matches the profile the tests run under; the default is release. On Linux with lld, the default linker since 1.90, perf needs `rustflags = ["-Clink-arg=-Wl,--no-rosegment"]` for accurate stacks ([flamegraph](https://github.com/flamegraph-rs/flamegraph)).
+5. **Keep symbols.** A profiling build needs at least `debug = "line-tables-only"`. Unset a CI-wide `CARGO_PROFILE_DEV_DEBUG=0` (check 5) for this run (heuristic).
+6. **Computing or waiting?** On Linux both profilers show on-CPU time only. If the samples add up to far less than the test's wall time, the test waits (sleep, I/O, locks, an async runtime idling), so read the test for sleeps and timeouts, or profile on macOS where samply also records off-CPU stacks.
+
+Report the top frames and their share of the test's time. That output is the evidence for the finding.
+
 ## Cache paths
 | Cache | Path | Key inputs | Notes |
 |---|---|---|---|
@@ -54,3 +65,4 @@ Checked 2026-11-18. Latest that day: Rust **1.100.0** (2026-11-12), `Swatinem/ru
 - Caching: [Swatinem/rust-cache](https://github.com/Swatinem/rust-cache), [sccache](https://github.com/mozilla/sccache), [sccache-action](https://github.com/Mozilla-Actions/sccache-action), [cargo-chef](https://github.com/LukeMathWalker/cargo-chef)
 - Tests: [nextest](https://nexte.st/), [archiving](https://nexte.st/docs/ci-features/archiving/), [partitioning](https://nexte.st/docs/ci-features/partitioning/)
 - Tools: [taiki-e/install-action](https://github.com/taiki-e/install-action)
+- Profiling: [nextest slow tests](https://nexte.st/docs/features/slow-tests/), [samply](https://github.com/mstange/samply), [cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph)
