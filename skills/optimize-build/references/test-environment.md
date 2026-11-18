@@ -3,13 +3,13 @@
 > **Use when** a measured hotspot is a JS/TS unit, component or E2E test step and you need to know where the time goes: DOM environment, CSS, imports and transforms, setup files, or per-test helpers.
 > **Skip** for worker counts and sharding (`test-parallelism.md`), for cache keys (`ci-github-caching.md`), and for non-JS runners: their per-test cost is in `stack/python.md`, `stack/go.md`, `stack/rust.md` and `stack/jvm.md`.
 
-Facts were checked on **2026-11-09**, and each one names the version it applies to. **(cited)** means a vendor or maintainer number, linked. **(local)** means a check run on 2026-11-09 against the published package (Apple M5 Pro, Node 24.22/26.13). It is one machine, so re-measure on the repo. **(heuristic)** means typical but unmeasured. Check versions first: `npm ls vitest jest jest-environment-jsdom jsdom happy-dom @playwright/test @testing-library/dom @testing-library/user-event msw typescript`.
+Facts were checked on **2026-11-09** and re-verified on **2026-11-18** (links, quoted passages and the highest-impact claims), and each one names the version it applies to. **(cited)** means a vendor or maintainer number, linked. **(local)** means a check run on 2026-11-09 against the published package (Apple M5 Pro, Node 24.22/26.13). It is one machine, so re-measure on the repo. **(heuristic)** means typical but unmeasured. Check versions first: `npm ls vitest jest jest-environment-jsdom jsdom happy-dom @playwright/test @testing-library/dom @testing-library/user-event msw typescript`.
 
-| Tool | Latest on 2026-11-09 | Facts that matter here |
+| Tool | Latest on 2026-11-18 | Facts that matter here |
 |---|---|---|
-| Vitest | 5.1.0, plus 4.1.12 (v4) and 3.2.7 (v3) | v5 needs Node ≥22.12 and Vite ≥6.4 ([migration](https://vitest.dev/guide/migration)). v4 needs Node ≥20 and Vite ≥6 ([v4 migration](https://v4.vitest.dev/guide/migration)). |
-| jsdom / happy-dom | 31.0.0 (2026-11-05) / 21.0.4 | jsdom has required Node `^22.22.2 \|\| ^24.15.0 \|\| >=26` since 30.0.0. 31.0.0 adds a new CSS engine with "faster selector queries and repeated style reads" and breaks canvas by moving to `@napi-rs/canvas` ([releases](https://github.com/jsdom/jsdom/releases)). |
-| DTL / user-event / MSW | 10.4.2 / 14.6.8 / 3.0.4 | MSW 3 renamed `onUnhandledRequest` to `onUnhandledFrame` and needs Node ≥22 ([3.x migration](https://mswjs.io/docs/migrations/2.x-to-3.x)). |
+| Vitest | 5.1.1, plus 4.1.12 (v4) and 3.2.7 (v3) | v5 needs Node ≥22.12 and Vite ≥6.4 ([migration](https://vitest.dev/guide/migration)). v4 needs Node ≥20 and Vite ≥6 ([v4 migration](https://v4.vitest.dev/guide/migration)). |
+| jsdom / happy-dom | 31.0.1 (31.0.0: 2026-11-05) / 21.0.4 | jsdom has required Node `^22.22.2 \|\| ^24.15.0 \|\| >=26` since 30.0.0. 31.0.0 adds a new CSS engine with "faster selector queries and repeated style reads" and breaks canvas by moving to `@napi-rs/canvas` ([releases](https://github.com/jsdom/jsdom/releases)). |
+| DTL / user-event / MSW | 10.4.2 / 14.6.12 / 3.0.7 | MSW 3 renamed `onUnhandledRequest` to `onUnhandledFrame` and needs Node ≥22 ([3.x migration](https://mswjs.io/docs/migrations/2.x-to-3.x)). |
 | ts-jest / @swc/jest / TypeScript | 29.4.15 / 0.2.39 / 7.0.2 | ts-jest's peer range is `typescript >=4.3 <7`. TS 7.0 "does not ship with an API" ([TS 7.0](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)). The `typescript@7.0.2` package only exports `./unstable/*` API entries. |
 
 Jest's bundled jsdom and Playwright's version changes: see [stack/jest.md](stack/jest.md) check 6 and [stack/playwright.md](stack/playwright.md) Version traps.
@@ -65,7 +65,7 @@ git ls-files '*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' | xargs grep -LE 
 **Good state:** pure-logic files run in `node`. DOM files don't re-import the environment per file, or their count is small.
 
 **Fixes:**
-1. **Split node from DOM tests with `projects`.** `environmentMatchGlobs` and `poolMatchGlobs` were deprecated in 3.2 and removed in 4.0 ([v4 migration](https://v4.vitest.dev/guide/migration)). In v5, inline projects default to `extends: true`, and arrays are merged, so `setupFiles` are **appended**. Inline projects that don't change the Vite config reuse the parent's Vite server ([migration](https://vitest.dev/guide/migration)).
+1. **Split node from DOM tests with `projects`.** `environmentMatchGlobs` and `poolMatchGlobs` were deprecated in 3.0 and removed in 4.0 ([v4 migration](https://v4.vitest.dev/guide/migration)). In v5, inline projects default to `extends: true`, and arrays are merged, so `setupFiles` are **appended**. Inline projects that don't change the Vite config reuse the parent's Vite server ([migration](https://vitest.dev/guide/migration)).
    ```ts
    test: { projects: [
      { extends: true, test: { name: 'unit', environment: 'node', include: ['src/**/*.test.ts'] } },
@@ -120,8 +120,8 @@ Vite plugins inherited by Vitest (Tailwind, Sass, PostCSS, checker: detection, t
 - **lucide-react 1.70:** the `node` condition for `.` resolves to **one CJS bundle**. Under Node resolution (Jest, Vitest-externalized deps) it is one big file, not thousands of modules, so check `importDurations` before rewriting. `lucide-react/icons/*` exists but is **ESM only** (`./dist/esm/icons/*.mjs`), so it can break in CJS Jest.
 
 ```bash
-git grep -nE "from '(@mui/(material|icons-material)|lodash|react-icons/[a-z]+|date-fns|@/components|\.\./?index)'" -- 'src/**/*.ts*' | wc -l
-git ls-files 'src/**/index.ts' 'src/**/index.tsx' | xargs grep -l "export \* from"   # internal barrels
+git grep -nE "from '(@mui/(material|icons-material)|lodash|react-icons/[a-z]+|date-fns|@/components|\.\./?index)'" -- ':(glob)src/**/*.ts*' | wc -l
+git ls-files ':(glob)src/**/index.ts' ':(glob)src/**/index.tsx' | xargs grep -l "export \* from"   # internal barrels
 ```
 **Fixes:**
 - **Deep imports**, enforced by a lint rule.

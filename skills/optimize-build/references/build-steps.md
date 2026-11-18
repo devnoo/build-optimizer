@@ -3,9 +3,9 @@
 > **Use when** a measured hotspot is in the `install`, `typecheck-lint`, `build`, `docker` or `topology` lane, or while running the waste audit.
 > **Skip** for test-runner hotspots (`test-*.md`) and cache-key problems (`ci-github-caching.md`).
 
-Facts were checked on **2026-11-09**, and each one names the version it applies to. **(cited)** means a vendor or maintainer number, linked; vendor benchmarks are not independent. **(heuristic)** means typical but unmeasured, so measure it on this repo before you claim a gain.
+Facts were checked on **2026-11-09** and re-verified on **2026-11-18** (links, quoted passages and the highest-impact claims), and each one names the version it applies to. **(cited)** means a vendor or maintainer number, linked; vendor benchmarks are not independent. **(heuristic)** means typical but unmeasured, so measure it on this repo before you claim a gain.
 
-**Latest versions on 2026-11-09** (from `npm view <pkg> version` and `gh api repos/<o>/<r>/releases`): typescript 7.0.2 (7.1.0-beta, no 7.1 RC yet), @typescript/typescript6 6.0.2, eslint 10.14.0, typescript-eslint 8.72.1, prettier 3.9.10, @biomejs/biome 2.6.6, oxlint 1.93.0, vite 8.3.7, next 16.4.5, webpack 5.112.2, turbo 2.11.10, nx 24.0.5, npm 12.2.2, pnpm 12.18.0, bun 1.4.4, @playwright/test 1.65.0. Actions: `actions/checkout` v7.0.1, `actions/setup-node` v7.1.0, `actions/cache` v6.1.0, `docker/build-push-action` v7.4.0, `pnpm/setup` v3.1.2, `pnpm/action-setup` v6.1.1. Check the repo's versions before you apply anything below.
+**Latest versions on 2026-11-18** (from `npm view <pkg> version` and `gh api repos/<o>/<r>/releases`): typescript 7.0.2 (7.1.0-beta, no 7.1 RC yet), @typescript/typescript6 6.0.2, eslint 10.15.0, typescript-eslint 8.73.0, prettier 3.10.1, @biomejs/biome 2.6.8, oxlint 1.94.0, vite 8.3.8, next 16.4.6, webpack 5.112.2, turbo 2.11.12, nx 24.0.6, npm 12.2.3, pnpm 12.21.0, bun 1.4.4, @playwright/test 1.65.1. Actions: `actions/checkout` v7.0.1, `actions/setup-node` v7.1.0, `actions/cache` v6.1.0, `docker/build-push-action` v7.4.0, `pnpm/setup` v3.2.0, `pnpm/action-setup` v6.1.1. Check the repo's versions before you apply anything below.
 
 ## 0. Ground rules
 
@@ -43,7 +43,7 @@ Package-manager specifics (`npm ci`, npm flags and npm 12 script approval, pnpm 
 
 | Fix | Detail, gain and risk |
 |---|---|
-| Skip browser downloads | Puppeteer: `PUPPETEER_SKIP_DOWNLOAD=true` (or `PUPPETEER_CHROME_SKIP_DOWNLOAD`). The cache lives in `~/.cache/puppeteer` ([config](https://pptr.dev/api/puppeteer.configuration)). Playwright ≥1.38 never downloads during `npm install` ([v1.38.0](https://github.com/microsoft/playwright/releases/tag/v1.38.0)), so the cost is in `npx playwright install`. Run it only in E2E jobs, install only the browsers you use (`--with-deps chromium`), and add `--only-shell` for headless-only runs ([browsers](https://playwright.dev/docs/browsers)). |
+| Skip browser downloads | Puppeteer: `PUPPETEER_SKIP_DOWNLOAD=true` (or `PUPPETEER_CHROME_SKIP_DOWNLOAD`). The cache lives in `~/.cache/puppeteer` ([config](https://pptr.dev/api/puppeteer.configuration)). The `playwright` and `@playwright/test` packages ≥1.38 do not download during `npm install` (the `@playwright/browser-*` packages still do) ([v1.38.0](https://github.com/microsoft/playwright/releases/tag/v1.38.0)), so the cost is in `npx playwright install`. Run it only in E2E jobs, install only the browsers you use (`--with-deps chromium`), and add `--only-shell` for headless-only runs ([browsers](https://playwright.dev/docs/browsers)). |
 | Monorepo slice | `pnpm install --filter <app>...` (the trailing `...` adds the package's dependencies) ([filtering](https://pnpm.io/filtering)). In Docker: `turbo prune <app> --docker` emits `json/`, `full/` and a pruned lockfile ([prune](https://turborepo.dev/docs/reference/prune)). Alternatively, `pnpm fetch` needs only the lockfile, then run `pnpm install -r --offline` ([fetch](https://pnpm.io/cli/fetch)). |
 
 **Pitfalls**

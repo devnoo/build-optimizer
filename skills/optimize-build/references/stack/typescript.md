@@ -2,7 +2,7 @@
 
 Use when: detect-stack.sh reported `typescript`. Lanes: typecheck-lint, cache.
 
-Checked on 2026-11-09. **(cited)** means a linked vendor number. **(local)** means a check run on 2026-11-09 against `typescript` 5.9.3, 6.0.2 and 7.0.2 (Apple silicon, synthetic projects), so re-measure on the repo. **(heuristic)** means typical but unmeasured. On npm, `typescript` is `latest` 7.0.2 (2026-07-08) and `beta` 7.1.0-beta (2026-10-20), with no 7.1 RC yet. The newest 6.x is 6.0.3, and `@typescript/typescript6` is 6.0.2; it ships only the `tsc6` bin. Run `npm view typescript dist-tags` first.
+Checked on 2026-11-09 and re-verified on 2026-11-18. **(cited)** means a linked vendor number. **(local)** means a check run on 2026-11-09 against `typescript` 5.9.3, 6.0.2 and 7.0.2 (Apple silicon, synthetic projects), so re-measure on the repo. **(heuristic)** means typical but unmeasured. On npm, `typescript` is `latest` 7.0.2 (2026-07-08) and `beta` 7.1.0-beta (2026-10-20), with no 7.1 RC yet. The newest 6.x is 6.0.3, and `@typescript/typescript6` is 6.0.2; it ships only the `tsc6` bin. Run `npm view typescript dist-tags` first.
 
 ## Short version
 
@@ -70,7 +70,7 @@ npx tsc -b tsconfig.json -f -v --extendedDiagnostics                          # 
 - **Good:** TS 7's `tsc` runs the check, and API consumers stay on 6.0 through the official aliases `"@typescript/native": "npm:typescript@^7.0.2"` and `"typescript": "npm:@typescript/typescript6@^6.0.2"`. With those, `npx tsc` runs 7.0 and imports of `typescript` get the 6.0 API ([TS 7.0](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)). There is no bin clash, because the 6 package ships only `tsc6`.
 - **Fix:** first clear the 6.0 deprecations: run tsc 6 with no `ignoreDeprecations`. TS 7 rejects removed options even when `"ignoreDeprecations": "6.0"` is set (TS5102 `baseUrl`, TS5108 `moduleResolution=node10`; local).
 - **Gain:** "typically… between 8x and 12x on full builds". Benchmarks run 7.7–11.9×, and up to 16.7× on vscode with `--checkers 8` (cited).
-- **Risk:** 7.0 "does not ship with an API". `typescript@7.0.2` exports only `./unstable/*`. These blockers were checked on npm on 2026-11-09:
+- **Risk:** 7.0 "does not ship with an API". `typescript@7.0.2` exports only `./unstable/*`, `./package.json` and a `.` stub that holds just `version` and `versionMajorMinor`. These blockers were checked on npm on 2026-11-09:
   - Peer range below 7: typescript-eslint 8.72.1 `>=4.8.4 <6.1.0`, ts-jest 29.4.15 `>=4.3 <7`, svelte-check 4.7.8 `^5||^6`, @astrojs/check 0.9.12 `^5||^6`, @angular/compiler-cli 22.2.5 `>=6.0 <6.1`, typedoc 0.28.20 up to `6.0.x`.
   - Need the API anyway: vue-tsc, MDX and Astro, which "will likely not yet be able to leverage TypeScript 7" (cited).
   - Error messages may print types differently from 6.0 ([typescript-go](https://github.com/microsoft/typescript-go)).
@@ -81,7 +81,7 @@ npx tsc -b tsconfig.json -f -v --extendedDiagnostics                          # 
 - **Good:** `--checkers` (experimental, default 4) is no higher than the vCPU count. `--builders` sets how many `-b` projects build concurrently, and it multiplies with `--checkers`.
 - **Fix:** on small runners, "you may want to decrease this number". `--singleThreaded` suits "very limited resources" (TS 7.0).
 - **Gain:** see C6. A bigger runner pays off only if CPU stays saturated.
-- **Risk:** higher values "come at the cost of increased memory usage". In 4-checker benchmarks, TS 7.0 used about 2–8 GiB per project (2,017–8,387 MiB) ([7.1 beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)), so watch for OOM on 8 GB runners.
+- **Risk:** higher values "come at the cost of increased memory usage" (TS 7.0). In 4-checker benchmarks, TS 7.0 used about 2–8 GiB per project (2,017–8,387 MiB) ([7.1 beta](https://devblogs.microsoft.com/typescript/announcing-typescript-7-1-beta/)), so watch for OOM on 8 GB runners.
 
 **C8 Leftover migration flag**
 - **Check:** `grep -rn stableTypeOrdering`.
@@ -115,8 +115,8 @@ npx tsc -b tsconfig.json -f -v --extendedDiagnostics                          # 
   - Only `outDir` set: `<outDir>/<config name>.tsbuildinfo`.
   - Otherwise: next to the config.
   - Detect it through `"incremental"`/`"composite"`; `incremental` defaults to `true` under `composite`. With `tsc -b` on TS ≥5.6, a buildinfo is written for every project, even without either option (5.6 notes).
-- **Trap: TS 6.0 moved the default path.** 6.0 made `rootDir` default to the config directory. A 5.x repo with `outDir` but no `rootDir` therefore has its default buildinfo move. Set `tsBuildInfoFile` explicitly to a path outside `node_modules`, because `npm ci` deletes `node_modules`.
-- **Build mode: cache outputs with the buildinfo.** With `tsc -b`, cache the emitted outputs (`outDir`/`declarationDir`) together with the buildinfo. If only the buildinfo is restored, `-b` reports "up to date" and never re-emits the missing `.d.ts`, so the next downstream rebuild fails with TS6305 "Output file … has not been built from source file" (local, 7.0.2). A shared `.cache/tsc/<pkg>` (C5) covers both with one path.
+- **Trap: the TS 6.0 `rootDir` fix moves the default path.** 6.0 made `rootDir` default to the config directory. A 5.x repo with `outDir` but no `rootDir` keeps its buildinfo at `<outDir>/<config name>.tsbuildinfo`, but its emit layout changes and tsc reports TS5011; adding `"rootDir": "src"` to fix that moves the default buildinfo next to the config (local, 5.9.3, 6.0.2 and 7.0.2). Set `tsBuildInfoFile` explicitly to a path outside `node_modules`, because `npm ci` deletes `node_modules`.
+- **Build mode: cache outputs with the buildinfo.** With `tsc -b`, cache the emitted outputs (`outDir`/`declarationDir`) together with the buildinfo. If only the buildinfo is restored, `-b` reports "up to date" and never re-emits the missing `.d.ts`, so the next downstream rebuild fails with TS6305 "Output file … has not been built from source file" (local, 7.0.2). A shared `.cache/tsc/<pkg>` (C5) covers both with one path, as long as `rootDir` is the config directory. With `rootDir: src` the default buildinfo lands one level up, at `.cache/tsc/tsconfig.tsbuildinfo` for every package, and `-b` fails with TS6377 (local, 6.0.2 and 7.0.2); set `tsBuildInfoFile` per package then.
 - **Cache key.** Use `tsc-${{ runner.os }}-<TS version>-${{ hashFiles('<lockfile>', 'tsconfig*.json', 'packages/*/tsconfig*.json') }}-${{ github.sha }}`, with `restore-keys: tsc-${{ runner.os }}-<TS version>-`. Read the version from `node -p "require('typescript/package.json').version"`; this works on 7.0 because `./package.json` is exported. Compute the key before install, or list explicit paths, so `hashFiles` never walks `node_modules`. The version belongs in the key because buildinfo from another version forces a full rebuild: `-b -v` prints TS6381 "generated with version '6.0.2' that differs with current version '7.0.2'" (local).
 - **Restore order.** Restore after checkout and before `tsc`. With the path outside `node_modules`, the order relative to install doesn't matter. If the buildinfo sits inside `node_modules`, restore it after install or move it. Save it only from the default branch (`ci-github-caching.md`).
 - **Trap: tsc6 and tsc7 sharing one buildinfo.** If both run on the same config, each overwrites the other's buildinfo, and every run becomes a full check (local). Give one of them its own `--tsBuildInfoFile`. Do the same for a concurrent `--noCheck` emit and `--noEmit` check (5.6 notes).
@@ -132,11 +132,11 @@ npx tsc -b tsconfig.json -f -v --extendedDiagnostics                          # 
 - **6.0 (2026-03-23), changed defaults:**
   - `types: []` (`["*"]` restores the old behaviour).
   - `strict: true`, `module: esnext`, and `target` = the current-year ES version.
-  - `rootDir` = the config directory, which moves `outDir` layouts and the default buildinfo path.
+  - `rootDir` = the config directory, which moves `outDir` layouts (TS5011); the default buildinfo path moves only when `rootDir` is then set explicitly (local).
   - `noUncheckedSideEffectImports: true` and `libReplacement: false`.
 - **6.0, deprecated or removed:**
-  - Deprecated: `target es5`, `downlevelIteration`, `moduleResolution node`/`node10`, `baseUrl`, `esModuleInterop`/`allowSyntheticDefaultImports false`, `alwaysStrict false`, `asserts` imports, and `module` used as `namespace`. `"ignoreDeprecations": "6.0"` silences the deprecations.
-  - Removed: `moduleResolution classic`, `module amd|umd|systemjs|none`, `outFile` and `no-default-lib` directives.
+  - Deprecated: `target es5`, `downlevelIteration`, `moduleResolution node`/`node10`, `baseUrl`, `esModuleInterop`/`allowSyntheticDefaultImports false`, `alwaysStrict false`, and `assert` imports (TS2880). `"ignoreDeprecations": "6.0"` silences these. `module` used as `namespace` is a hard error (TS1540) that it does not silence (local, 6.0.2).
+  - Also only deprecated in 6.0.2, although the post's text says "removed" (TS5101/TS5107, silenced by `ignoreDeprecations`; local): `moduleResolution classic`, `module amd|umd|system|none` and `outFile`. `no-default-lib` directives are no longer honoured and raise no error (local).
   - Passing CLI file paths while a tsconfig is present triggers "tsconfig.json is present but will not be loaded".
   - `--stableTypeOrdering` is a temporary flag (C8).
 - **7.0 (2026-07-08, Go port, published as `typescript` with bin `tsc`):**

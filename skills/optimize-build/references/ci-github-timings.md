@@ -3,7 +3,7 @@
 > **Use when:** the MEASURE phase of `optimize-build`. You need p50/p90 job and step times, queue vs exec, and the critical path of a GitHub Actions workflow before you change anything.
 > **Also use when:** writing an adapter for GitLab, CircleCI, Buildkite or Azure Pipelines (§10). Every downstream script reads one NDJSON shape.
 
-Fact-checked 2026-11-09 with gh 2.103.3, jq 1.8.2, REST API version `2026-03-10`, and live runs of `vitest-dev/vitest`, `astral-sh/ruff`, `cli/cli` and `electron/electron`. Every script below was run on 2026-11-09. "Observed" means seen in live API data but not documented by GitHub, so re-check it if results look off. Tool versions current that day: Vitest 5.1.0, Jest 30.5.2, Playwright 1.65.0, hyperfine 2.0.0, actions/upload-artifact v7.0.2.
+Fact-checked 2026-11-09 (re-verified 2026-11-18: links, quoted passages, scripts and the highest-impact claims) with gh 2.103.3, jq 1.8.2, REST API version `2026-03-10`, and live runs of `vitest-dev/vitest`, `astral-sh/ruff`, `cli/cli` and `electron/electron`. Every script below was run on 2026-11-09. "Observed" means seen in live API data but not documented by GitHub, so re-check it if results look off. Tool versions current that day: Vitest 5.1.0, Jest 30.5.2, Playwright 1.65.0, hyperfine 2.0.0, actions/upload-artifact v7.0.2.
 
 ## 0. Procedure
 
@@ -47,7 +47,7 @@ gh run list -R O/R -w ci.yml -b main -s success -e push -L 50 --created '>=2026-
 
 - The REST equivalent is `GET /repos/{o}/{r}/actions/workflows/{file-or-id}/runs?branch=&status=success&event=push&per_page=100`. `per_page` has a maximum of 100. With any of `actor, branch, check_suite_id, created, event, head_sha, status` the endpoint returns **at most 1,000 results**. For longer windows, slice by `created=2026-10-01..2026-10-15` ([runs API](https://docs.github.com/en/rest/actions/workflow-runs)).
 - **Use attempt 1 only, via `/attempts/1/jobs`.** Observed on vitest, ruff and vite after "re-run failed jobs": the attempt-N job list re-lists jobs that already passed. They get a **new job id, `run_attempt: N` and a new `created_at`** but keep the **original `started_at`/`completed_at`**, so `started_at < created_at` and queue time comes out negative. `?filter=all` returns every attempt. The default `latest` returns only the newest attempt ([jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)). Full re-runs were not observed. Count runs with `run_attempt > 1` separately as a flakiness signal.
-- **Keep events apart.** Use `push` on the default branch as the baseline. `pull_request` is what developers actually wait on, and path filters, `if:` and queueing can all differ there. On vitest, push runs on main queued 2–3 s per job, but job queues in one PR run (42643021918) were 1–6 min. Merge queues run as `merge_group`. `schedule` and `workflow_dispatch` usually run different job sets.
+- **Keep events apart.** Use `push` on the default branch as the baseline. `pull_request` is what developers actually wait on, and path filters, `if:` and queueing can all differ there. On vitest, push runs on main mostly queued 2–3 s per job, but job queues in one PR run (42643021918) ranged from 2 s to almost 6 min (median about 3 min). Merge queues run as `merge_group`. `schedule` and `workflow_dispatch` usually run different job sets.
 - **Sample size.** Get at least 10 data points per job: 20–50 runs, or 14–30 days. Report p50 and p90, never the mean of a few runs. Jobs gated by `if:` or path filters will have a lower n, so always print n.
 - **Regression hunt:** compare the p50 of the last 10 runs with the p50 of the 10 runs before them.
 
@@ -61,7 +61,7 @@ gh run list -R O/R -w ci.yml -b main -s success -e push -L 50 --created '>=2026-
 | `job.created_at` | **the moment the job became eligible**. Observed on vitest (22 jobs) and ruff (37 jobs): equal to the `completed_at` of its last `needs:` dependency, to the second. Undocumented, since the schema lists only the type ([jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)) |
 | `job.started_at` / `completed_at` | runner picked the job up / job finished. **Skipped jobs:** `started_at == created_at`, and `completed_at` can be 1 s *earlier* (ruff), so filter on `conclusion` |
 | `job.labels`, `runner_name`, `runner_group_name` | runner type: hosted, self-hosted or third-party (e.g. ruff's `namespace-profile-*`), and size |
-| `steps[].number/name/started_at/completed_at` | 1-second resolution. Numbers have gaps (skipped steps are omitted). Includes `Set up job`, `Post …` and `Complete job` |
+| `steps[].number/name/started_at/completed_at` | 1-second resolution. Numbers have gaps before the `Post …` steps (observed: post slots that never ran are omitted). Skipped steps are listed, with `conclusion: "skipped"`. Includes `Set up job`, `Post …` and `Complete job` |
 
 - **`queue_s = started_at − created_at`** measures runner availability. Plan caps for standard hosted runners are Free 20, Pro 40, Team 60 and Enterprise 500 concurrent jobs. macOS is 5 (50 on Enterprise) and shared with larger runners ([limits](https://docs.github.com/en/actions/reference/limits), 2026 values). Other causes are `strategy.max-parallel`, the size of a self-hosted or third-party pool, and `environment:` protection rules. Read the YAML before you blame the plan.
 - **`exec_s = completed_at − started_at`.**
@@ -95,7 +95,7 @@ done
 ## 4. Aggregate (p50/p90 per job and step)
 
 ```jq
-# agg.jq — jq -s -r -f agg.jq jobs.ndjson   (nearest-rank percentiles; trust n >= 5)
+# agg.jq — jq -s -r -f agg.jq jobs.ndjson   (floor-rank percentiles, index floor((n-1)*p), at most one rank below nearest-rank; trust n >= 5)
 def pct(p): sort | .[((length - 1) * p | floor)];
 def stats(f): map(f) | {n: length, p50: pct(0.5), p90: pct(0.9)};
 ( group_by(.job) | map({k: .[0].job, x: stats(.exec_s), q: stats(.queue_s)})
@@ -262,7 +262,7 @@ If no reports are uploaded, propose this one-time addition. It unblocks the test
    ```bash
    hyperfine -S --warmup 1 --runs 5 --export-json warm.json 'npm run build'
    hyperfine -S --runs 3 --prepare 'rm -rf node_modules/.cache dist' --export-json cold.json 'npm run build'
-   jq '.results[] | {name, mean: .summary.time_wall_clock.mean}' warm.json
+   jq '.results[] | {command, mean: .summary.time_wall_clock.mean}' warm.json
    ```
    hyperfine 2.0.0 (2026-10-07) runs commands **without a shell by default**. `-S` is now an alias for `--shell=default` and restores `sh`, which you need for `&&`, pipes and `$VAR`. `--prepare/--setup/--conclude/--cleanup` always run in a shell. The JSON moved to schema v2: `results[].mean` became `results[].summary.time_wall_clock.mean` ([v2.0.0](https://github.com/sharkdp/hyperfine/releases/tag/v2.0.0)). **On 1.x**, drop `-S` (in 1.x it takes a shell argument, and a shell is already the default) and read `.results[].mean`. Check the version with `hyperfine --version`.
 3. Approximate the runner. `ubuntu-latest` has 2 vCPU / 8 GB in private repos and 4 vCPU / 16 GB in public ones. `macos-latest` is 3 vCPU (M1) / 7 GB ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)). For example: `docker run --rm --cpus=2 --memory=8g -v "$PWD":/w -w /w node:24 …`.
@@ -321,7 +321,7 @@ Rules: normalize timestamps to UTC, keep only successful jobs for timing, use th
 - `getJobs` = `GET /api/v2/workflow/{id}/job`. Each job has `started_at, stopped_at, dependencies[]`, and the dependencies are the edges.
 - Steps: v3 `GET /api/v3/jobs/:id` gives `queued_at, started_at, ended_at` and `parallel_executions[].steps[].started_at/ended_at`.
 - Logs: `GET /api/v3/jobs/:id/stdout?filter[step_num]=N[&filter[execution]=K]`.
-- Artifacts and tests: `/api/v3/jobs/:id/artifacts` and `/tests`, which returns JSON Lines. The v3 docs carry no preview label, but v3 is new, so pin to the documented fields.
+- Artifacts and tests: `/api/v3/jobs/:id/artifacts` and `/tests`, which returns JSON Lines. The v3 endpoints named here carry no preview label (the same page marks `/test-atoms` and `/testsuite-metadata` EXPERIMENTAL), but v3 is new, so pin to the documented fields.
 - Shortcut: `GET /api/v2/insights/{slug}/workflows/{name}/jobs` returns server-side `duration_metrics` (`min, mean, median, p95, max, standard_deviation`).
 - Config: `GET /api/v2/pipeline/{id}/config`, which includes `compiled`.
 

@@ -3,7 +3,7 @@
 Use when: a test step is a measured hotspot and you need to know whether it runs serially, under-uses its cores, or should be sharded.
 Runner specifics for Vitest, Jest and Playwright are in `stack/vitest.md`, `stack/jest.md` and `stack/playwright.md`. §8 has the worker settings for pytest-xdist, go test, Gradle, Surefire and JUnit; what else those suites pay for (compile, result caches, fixtures, contexts, containers) is in `stack/python.md`, `stack/go.md`, `stack/rust.md` and `stack/jvm.md`. JS environment cost (jsdom, browser mode) is in `test-environment.md`.
 
-Versions checked 2026-11-09 with `gh release list -R <repo> -L 3`: Vitest 5.1.0 (4.1.12 still gets patches), Jest 30.5.2, Playwright 1.65.0, pytest-xdist 3.8.0, Gradle 9.9.0, Surefire 3.6.1, JUnit 6.1.3, libuv 1.53.0. **Read the repo's lockfile versions first.** Several defaults below changed in the last two majors.
+Versions checked 2026-11-18 with `gh release list -R <repo> -L 3`: Vitest 5.1.1 (4.1.12 still gets patches), Jest 30.5.2, Playwright 1.65.1, pytest-xdist 3.8.0, Gradle 9.9.1, Surefire 3.6.1, JUnit 6.1.3, libuv 1.53.0. Facts were checked on 2026-11-09 and re-verified on 2026-11-18; source links stay pinned to the tags they were read at. **Read the repo's lockfile versions first.** Several defaults below changed in the last two majors.
 
 ## 0. Decision flow and fix menu
 
@@ -99,7 +99,7 @@ jq '([.testResults[] | .endTime - .startTime] | add) as $busy
   | {busy_s: ($busy/1000), wall_s: ($wall/1000), avg_concurrency: ($busy/$wall)}' r.json
 ```
   `avg_concurrency` ≈ 1 means serial. Good is ≥0.7 × workers (heuristic, not from a source). A long tail at the end means one big file dominates: split it. Vitest's span runs from the first test start to the last test end, so it **excludes import and environment time** ([json.ts](https://github.com/vitest-dev/vitest/blob/v5.1.0/packages/vitest/src/node/reporters/json.ts)) and undercounts busy time. Jest uses per-file `perfStats` ([formatTestResults.ts](https://github.com/jestjs/jest/blob/v30.5.2/packages/jest-test-result/src/formatTestResults.ts)).
-- Runner log signals (Playwright `using M workers`, Vitest `Duration` breakdown and hints): see [stack/playwright.md](stack/playwright.md) and [stack/vitest.md](stack/vitest.md) (Measure).
+- Runner log signals (Playwright `using M worker(s)`, Vitest `Duration` breakdown and hints): see [stack/playwright.md](stack/playwright.md) and [stack/vitest.md](stack/vitest.md) (Measure).
 - **Monorepo nesting:** turbo runs 10 tasks at once by default ([turbo run](https://turborepo.dev/docs/reference/run)) and Nx runs 3 ([nx](https://nx.dev/docs/reference/nx-commands)). Each task's Vitest or Jest then starts n−1 workers of its own, which oversubscribes the CPU, inflates timeouts and causes OOMs. Cap one layer, e.g. `--concurrency=1` for test tasks or `--maxWorkers=2` per package.
 
 ## 2–4. Runner specifics (Vitest, Jest, Playwright)
@@ -123,7 +123,7 @@ Rule of thumb: with default per-file isolation (Vitest, Jest, Playwright), **cro
 | Env var / cwd mutation | Config-dependent flakes | Vitest `vi.stubEnv` + `unstubEnvs: true`. Go `t.Setenv`/`t.Chdir` **panic** in parallel tests ([testing](https://pkg.go.dev/testing#T.Setenv)). JUnit `@ResourceLock(Resources.SYSTEM_PROPERTIES)` |
 | Clock / fake timers | Timeouts under concurrency | Fake timers patch the worker's globals, so don't mix them with in-file `concurrent`. Go 1.25 `testing/synctest` gives each test a bubble with virtual time. JUnit has `Resources.TIME_ZONE`/`LOCALE` locks |
 | External services / rate limits | 429s, sandbox-account collisions | Mock at the network edge. Playwright `lock` (1.63+). Otherwise per-worker accounts or the serial lane |
-| Memory | Exit 137, `heap out of memory`, Jest "worker failed to exit gracefully" | Workers × per-worker peak RSS < ~75% of RAM (heuristic). Lower the worker count; use Jest `workerIdleMemoryLimit`; use Vitest `vmMemoryLimit` and top-level `execArgv: ['--max-old-space-size=…']` (4.0+) |
+| Memory | Exit 137, `heap out of memory`, Jest "A worker process has failed to exit gracefully" | Workers × per-worker peak RSS < ~75% of RAM (heuristic). Lower the worker count; use Jest `workerIdleMemoryLimit`; use Vitest `vmMemoryLimit` and top-level `execArgv: ['--max-old-space-size=…']` (4.0+) |
 | CPU starvation | Timeouts, not assertion errors, only in parallel | Workers ≤ cores (or quota). Reproduce by oversubscribing: `--maxWorkers=$(( $(nproc)*2 ))` (a number) or Playwright `--workers=200%`, with `--repeats`/`--repeat-each` |
 
 Per-worker DB sketch (pin `maxWorkers` explicitly so global setup knows N):
@@ -148,7 +148,7 @@ npx playwright test --shuffle --repeat-each=3   # ≥1.64; prints "shuffle seed 
 pytest -n auto                                  # pytest-randomly (installed) shuffles by default, prints "Using --randomly-seed=N"; rerun with --randomly-seed=last
 go test -shuffle=on -count=3 ./...              # prints the -test.shuffle seed; bypasses the test cache
 ```
-   Vitest ≥5 also has `--repeats=N` ([repeats](https://vitest.dev/config/repeats)). JUnit: set `junit.jupiter.testclass.order.default=org.junit.jupiter.api.ClassOrderer$Random` and `junit.jupiter.testmethod.order.default=org.junit.jupiter.api.MethodOrderer$Random` ([order](https://docs.junit.org/6.1.3/writing-tests/test-execution-order.html)).
+   Vitest ≥5 also has `--repeats=N` ([repeats](https://vitest.dev/config/repeats)). Before Vitest 5.1.1 (4.1.12 included) the same `--sequence.seed` does not reproduce the shuffled file order, because the glob order varies between runs ([#11340](https://github.com/vitest-dev/vitest/issues/11340), fixed in 5.1.1 by [#11926](https://github.com/vitest-dev/vitest/pull/11926)); a seed recorded on ≤5.1.0 also gives a different order on 5.1.1. JUnit: set `junit.jupiter.testclass.order.default=org.junit.jupiter.api.ClassOrderer$Random` and `junit.jupiter.testmethod.order.default=org.junit.jupiter.api.MethodOrderer$Random` ([order](https://docs.junit.org/6.1.3/writing-tests/test-execution-order.html)).
 3. For each failing seed, rerun that seed, then run the failing file **alone**. If it passes alone, the cause is shared state. If it fails alone, it is an ordinary flake.
 4. **Quarantine without blocking the rest:** move offenders to a serial lane and keep everything else parallel. Record each one with an owner and a reason.
    Vitest serial lane (`projects` + `groupOrder`, and the inherited-`include` pitfall): see [stack/vitest.md](stack/vitest.md) check 2.

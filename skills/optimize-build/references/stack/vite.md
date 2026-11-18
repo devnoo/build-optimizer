@@ -2,7 +2,7 @@
 
 Use when: detect-stack.sh reported `vite`. Lanes: test, bundle.
 
-Checked 2026-11-09: vite **8.3.7** (latest; v7 line 7.3.x), rolldown 1.3.1, @vitejs/plugin-react 6.3.0, @tailwindcss/vite 4.3.5, vitest 5.1.0 (`npm view <pkg> version`). Read the repo's versions first: `npm ls vite rolldown-vite @vitejs/plugin-react @vitejs/plugin-react-swc @rolldown/plugin-babel vitest`. **(local)** = run on 2026-11-09 (Node 26.13, one Apple-silicon machine) on a synthetic app: 400 React components importing `@mui/material` 9.5, `@mui/icons-material` 9.5, `lodash-es` and `date-fns` 4.4 through their barrels (12,996 modules). Wall times include `npx` start-up, 4 runs each. They show direction, not this repo's gain. Vitest-only knobs (pools, `deps.optimizer`, `fsModuleCache`) are in `vitest.md`.
+Checked 2026-11-09, re-verified 2026-11-18: vite **8.3.7** (8.3.8 is the latest; v7 line 7.3.x), rolldown 1.3.1, @vitejs/plugin-react 6.3.0, @tailwindcss/vite 4.3.5, vitest 5.1.0 (`npm view <pkg> version`). Read the repo's versions first: `npm ls vite rolldown-vite @vitejs/plugin-react @vitejs/plugin-react-swc @rolldown/plugin-babel vitest`. **(local)** = run on 2026-11-09 (Node 26.13, one Apple-silicon machine) on a synthetic app: 400 React components importing `@mui/material` 9.5, `@mui/icons-material` 9.5, `lodash-es` and `date-fns` 4.4 through their barrels (12,996 modules). Wall times include `npx` start-up, 4 runs each. They show direction, not this repo's gain. Vitest-only knobs (pools, `deps.optimizer`, `fsModuleCache`) are in `vitest.md`.
 
 ## Measure
 
@@ -18,7 +18,7 @@ DEBUG=vite:plugin-transform npx vitest run --no-fsModuleCache 2>&1 | awk '{for(i
   END{for(p in t) printf "%9.1f ms %5d  %s\n", t[p], n[p], p}' | sort -rn | head
 ```
 - **`N modules transformed` far above the repo's own source-file count** means barrels or icon packs are pulled in whole (check S1). One `building … environment` line per environment: SSR frameworks build client and server.
-- **`[PLUGIN_TIMINGS]` (Vite 8):** Rolldown's `checks.bundlerTimings` (default `true`; replaces the deprecated `pluginTimings`). It fires only when the build takes over 3 s and plugin time exceeds 100× the link stage. Rows appear only for callbacks costing ≥1 s, and the time is CPU time summed over concurrent hooks. Watch and dev rebuilds never print it ([checks](https://rolldown.rs/options/checks)). Local output: `JavaScript callbacks ran for 5.5s of this 5.5s build (100%)` / `- plugin slow-plugin transform (100%, 5.5s, 57 calls)`. Rollup-based Vite ≤7 has no equivalent, so use `--profile` there.
+- **`[PLUGIN_TIMINGS]` (Vite 8):** Rolldown's `checks.bundlerTimings` (default `true`; replaces the deprecated `pluginTimings`). It fires only when the build takes over 3 s and plugin time exceeds 100× the link stage. Rows appear only for callbacks costing ≥1 s, and each row is wall time measured inside the callback, not CPU time (a hook whose own calls overlap is listed without a time). Watch and dev rebuilds never print it ([checks](https://rolldown.rs/options/checks)). Local output: `JavaScript callbacks ran for 5.5s of this 5.5s build (100%)` / `- plugin slow-plugin transform (100%, 5.5s, 57 calls)`. Rollup-based Vite ≤7 has no equivalent, so use `--profile` there.
 - **The plugin-transform debug line is written only when a hook returns a result** (8.3.7 dist). A plugin that burns time and returns nothing never shows up, so A/B it by removing the plugin. `--no-fsModuleCache` is needed on Vitest ≥5.0.4: with a warm module cache, nothing is transformed and nothing is logged (local). On v4 the cache is off by default, so drop the flag. `vite:plugin-resolve` does the same for `resolveId`.
 - **Dev server / E2E against `vite`:** `vite --debug transform` lists per-file transform times. `vite --profile` records a `.cpuprofile` when you press `p + enter` ([perf guide](https://vite.dev/guide/performance)). vite-plugin-inspect v12 needs Vite 8 plus `@vitejs/devtools` ≥0.7; use v11 on older Vite ([repo](https://github.com/antfu-collective/vite-plugin-inspect)).
 
@@ -38,7 +38,7 @@ DEBUG=vite:plugin-transform npx vitest run --no-fsModuleCache 2>&1 | awk '{for(i
 
 ### T2. Babel back in the transform path (React Compiler, plugin-react v5 `babel`, plugin-react-swc)
 - **Check** `rg -n "babel|reactCompiler|react-compiler|plugin-react-swc" vite.config.* package.json`.
-- **Facts** `@vitejs/plugin-react` v6 (Vite 8) dropped Babel: "Vite 8+ can handle React Refresh Transform by Oxc". The React Compiler is added back with `babel({ presets: [reactCompilerPreset()] })` from `@rolldown/plugin-babel` ([plugin-react](https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react)). In the 6.3.0 dist, `reactCompilerPreset` applies only where `consumer === 'client'`. So `environment: 'node'` tests skip it, while happy-dom tests pay for it (local). jsdom also uses the client optimizer, so it probably pays too (inferred).
+- **Facts** `@vitejs/plugin-react` v6 (Vite 8) dropped Babel: "Vite 8+ can handle React Refresh Transform by Oxc" ([CHANGELOG, 6.0.0-beta.0](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/CHANGELOG.md)). The React Compiler is added back with `babel({ presets: [reactCompilerPreset()] })` from `@rolldown/plugin-babel`, or since 6.1.0 without Babel through the experimental `react({ compiler: true })` (needs `oxc-transform-react`) ([plugin-react](https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react)). In the 6.3.0 dist, `reactCompilerPreset` applies only where `consumer === 'client'`. So `environment: 'node'` tests skip it, while happy-dom tests pay for it (local). jsdom also uses the client optimizer, so it probably pays too (inferred).
 - **Fix**
   - Exclude non-React code with `myPreset.rolldown.filter.id.exclude = ['src/utils/**']`, or use `compilationMode: 'annotation'`.
   - Gate the compiler out of unit tests.
@@ -54,7 +54,7 @@ DEBUG=vite:plugin-transform npx vitest run --no-fsModuleCache 2>&1 | awk '{for(i
 - **Facts**
   - Importing one API from a barrel makes Vite fetch and transform every re-exported file in dev and in tests ([perf guide](https://vite.dev/guide/performance)).
   - Rolldown `experimental.lazyBarrel` (default `false`) "avoids compiling unused re-export modules in side-effect-free barrel modules" ([experimental](https://rolldown.rs/options/experimental)).
-  - It works in Vite 8 via `build.rolldownOptions.experimental.lazyBarrel: true`, but only for barrels marked side-effect-free. On a local barrel without `sideEffects` it had no effect (57 modules either way); with `sideEffects` it went 57 → 7 (local).
+  - It works in Vite 8 via `build.rolldownOptions.experimental.lazyBarrel: true`, but only for barrels marked side-effect-free and written as named re-exports (`export { x } from`); an import that is only reachable through `export * from` still loads every star re-export. On a local barrel without `sideEffects` it had no effect (57 modules either way); with `sideEffects` it went 57 → 7 (local).
   - Barrels with >5,000 re-exports (e.g. `@mui/icons-material`, 10,611) still pay a resolve per re-export. Rolldown logs `LARGE_BARREL_MODULES` and suggests `@rolldown/plugin-transform-imports` ([lazy barrel](https://rolldown.rs/in-depth/lazy-barrel-optimization)).
 - **Fix**
   - Build: enable `lazyBarrel`, and add `"sideEffects": false` (or a list such as `["*.css"]`) to internal packages.
@@ -80,7 +80,7 @@ DEBUG=vite:plugin-transform npx vitest run --no-fsModuleCache 2>&1 | awk '{for(i
   - Register upload and deploy plugins only in the job that deploys.
   - Use `apply: 'build'`, or `apply(config, { command })` returning false, to keep plugins out of dev and test.
   - Plugin authors: add hook filters (`transform: { filter: { id: /\.css$/ }, handler }`), supported in Vite 6.3.0+ and Rollup 4.38.0+ ([plugin API](https://vite.dev/guide/api-plugin)). Keep `config`/`configResolved`/`buildStart` light, dynamic-`import()` heavy dependencies, and bail out of `resolveId`/`load`/`transform` early ([perf guide](https://vite.dev/guide/performance)).
-- **Gain** The plugin's share in the warning. Rolldown's benchmark: 10 unfiltered JS plugins took 2,792 ms vs 745 ms filtered (3.74×) ([hook filter](https://rolldown.rs/in-depth/why-plugin-hook-filter)).
+- **Gain** The plugin's share in the warning. Rolldown's benchmark: 10 unfiltered JS plugins took 2,792 ms vs 747 ms filtered (3.74×) ([hook filter](https://rolldown.rs/in-depth/why-plugin-hook-filter)).
 - **Risk** The deploy build must still upload maps or emit the PWA manifest.
 
 ### B3. Minifier
@@ -102,7 +102,7 @@ DEBUG=vite:plugin-transform npx vitest run --no-fsModuleCache 2>&1 | awk '{for(i
 
 ### O1. Dev-server consumers in CI: E2E against `vite`, Vitest browser mode
 - **Check**
-  - Grep the job log for `dependencies optimized:`, `optimized dependencies changed. reloading`, `to optimizeDeps.include` or `optimizeDeps.needsInterop` (strings from the 8.3.7 dist).
+  - Grep the job log for `dependency optimized:` or `dependencies optimized:`, `optimized dependencies changed. reloading`, `to optimizeDeps.include` or `optimizeDeps.needsInterop` (strings from the 8.3.7 dist).
   - `rg -n "\-\-force|optimizeDeps" vite.config.* package.json .github/workflows`.
 - **Facts** Pre-bundling "only applies in development mode" ([pre-bundling](https://vite.dev/guide/dep-pre-bundling)), so `optimizeDeps` never affects `vite build`. When a dependency is discovered late, Vite re-bundles and reloads the page. Vitest's `deps.optimizer` inherits `optimizeDeps` ([deps](https://vitest.dev/config/deps)). That browser mode hits the same reloads is inferred.
 - **Fix**

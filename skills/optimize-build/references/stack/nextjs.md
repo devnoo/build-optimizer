@@ -2,7 +2,7 @@
 
 Use when: detect-stack.sh reported `nextjs`. Lanes: bundle, cache.
 
-Checked 2026-11-09 against the docs, the release posts and the source at tag `v16.4.5` (the latest version; 16.3.0 shipped 2026-08-03 and 16.4.0 on 2026-10-06). **(vendor)** = Vercel's own benchmark. **(source)** = read in `vercel/next.js@v16.4.5` and not stated in the docs. Get the repo's version first with `npm ls next`. Paths are relative to the **Next app dir** (the folder with `next.config.*`), not the monorepo root.
+Checked 2026-11-09 and re-verified 2026-11-18 against the docs, the release posts and the source at tag `v16.4.5` (16.4.6 is the latest; 16.3.0 shipped 2026-08-03 and 16.4.0 on 2026-10-06). **(vendor)** = Vercel's own benchmark. **(source)** = read in `vercel/next.js@v16.4.5` and not stated in the docs. Get the repo's version first with `npm ls next`. Paths are relative to the **Next app dir** (the folder with `next.config.*`), not the monorepo root.
 
 ## Measure
 
@@ -11,12 +11,12 @@ Checked 2026-11-09 against the docs, the release posts and the source at tag `v1
   gh run view <id> --log | grep -E 'Next\.js 1[0-9]|Compiled successfully in|Finished TypeScript|Collecting page data using|Generating static pages using .* in|Collecting build traces in|Finalizing page optimization in|No build cache found'
   ```
   The header `▲ Next.js 16.x (Turbopack)` or `(webpack)` names the bundler. `Finished TypeScript config validation in` means `ignoreBuildErrors` is on. `Collecting build traces` appears only on webpack builds (source). `Generating static pages using N workers (x/y) in` shows prerender parallelism.
-- **`.next/trace-build`** (16.0+, source) is JSON lines of top-level spans, durations in µs: `next-build`, `run-turbopack`/`run-webpack`, `run-typescript`, `static-check`, `static-generation`, `collect-build-traces`, `output-standalone`. In 16.2+ it also has `turbopack-persistence`, `turbopack-compaction` and `turbopack-emit`, which are the cache write cost. Upload it as an artifact, then:
+- **`.next/trace-build`** (16.0+, source) is JSON lines of top-level spans, durations in µs: `next-build`, `run-turbopack`/`run-webpack`, `run-typescript`, `static-check`, `static-generation`, `collect-build-traces`, `output-standalone`. In 16.2+ it also has `turbopack-persistence` and `turbopack-compaction`, which are the cache write cost. 16.4+ adds `turbopack-module-graph`, `turbopack-write-entrypoints` and `turbopack-emit`, which time compilation and output emit, not the cache. Upload it as an artifact, then:
   ```bash
   jq -s -r 'add | group_by(.name)[] | [((map(.duration)|add)/1e6*10|round/10), .[0].name] | @tsv' .next/trace-build | sort -rn
   ```
-  On ≤15, `.next/trace` has the same format with many more spans. `next build` keeps both files when it cleans `.next/`.
-- **CPU profile:** `next build --experimental-cpu-prof` (16.2+) writes `.next-profiles/build-main-*` and `build-turbopack-*` `.cpuprofile` files (on webpack: `build-webpack-{client,server,edge-server}-*`). Open them in the Chrome DevTools Performance tab.
+  On ≤15, `.next/trace` has the same format with many more spans. Each `next build` starts both files fresh: on 16.4 the clean keeps `trace` but deletes `trace-build`, and both are opened in truncate mode (source), so copy them before the next build.
+- **CPU profile:** `next build --experimental-cpu-prof` (16.2+) writes `.next-profiles/build-main-*` `.cpuprofile` files, plus `build-turbopack-*` on 16.2–16.3 only (16.4 compiles in the main process, so Turbopack's JS side is in `build-main-*`; source, though the CLI docs still list it) (on webpack: `build-webpack-{client,server,edge-server}-*`). Open them in the Chrome DevTools Performance tab.
 - **Per-module Turbopack time:** `next build --internal-trace [all|overview]` writes `.next-profiles/trace-turbopack.bin`. The build flag exists in 16.3+ source; the docs only show it for `next dev`. Run `npx next internal trace <file>`, open https://trace.nextjs.org and pick "Spans in order".
 - **webpack/SWC per file:** `experimental.swcTraceProfiling: true` writes `.next/swc-trace-profile-<ts>.json` (open in Perfetto or speedscope).
 - **Local A/B** (same machine, ≥3 runs each): cold `rm -rf .next && next build` vs a second warm run isolates the FS cache. `--webpack` vs the default isolates the bundler. `--experimental-build-mode compile` (experimental) skips type checking and prerendering (source). In the App Router, type checking runs **after** compilation, serially, so it adds to the critical path (source).
@@ -25,7 +25,7 @@ Checked 2026-11-09 against the docs, the release posts and the source at tag `v1
 
 1. **Bundler is webpack.** **Check** `grep -nE 'next build.*--webpack' package.json .github/workflows/*.y*ml; grep -nE '\bwebpack\s*[:(]' next.config.*`, the `(webpack)` log header, or `next` <16 without `--turbopack`. **Good** `next` ≥16 with a plain `next build`.
    **Fix** remove `--webpack`; port `webpack()` tweaks to `turbopack.rules` (webpack loaders) or `turbopack.resolveAlias`. On webpack only, barrel-heavy packages need `experimental.optimizePackageImports`; Turbopack analyzes imports itself. **Gain** "2–5× faster production builds" (vendor, Next 16).
-   **Risk** Turbopack does not support webpack plugins, `sassOptions.functions`, Yarn PnP or Sass `~` imports. CSS-module order follows JS import order, and Lightning CSS keeps 5 decimals where webpack keeps 10. On 16, a `webpack` key makes a plain `next build` fail; plugins often add that key, and `next build --turbopack` ignores it.
+   **Risk** Turbopack does not support webpack plugins, `sassOptions.functions`, Yarn PnP or Sass `~` imports. CSS-module order follows JS import order, and Lightning CSS keeps 5 decimals where webpack keeps 10. On 16, a `webpack` key with no `turbopack` key makes a plain `next build` fail (source); plugins often add that key, and `next build --turbopack` ignores it.
 2. **A Babel config is present.** **Check** `ls .babelrc .babelrc.{json,js,mjs,cjs} babel.config.{js,json,mjs,cjs} 2>/dev/null` in the app dir. This is the exact list Next checks (source); `babel.config.ts` and the `package.json` `babel` key are not detected. **Good** none.
    **Fix** delete it and use SWC built-ins `compiler.{styledComponents,emotion,relay,removeConsole,reactRemoveProperties,define}`. If it exists only for Jest, switch to `next/jest` (SWC transform), or rename it so Next misses it and pass it to `babel-jest` via `configFile` (heuristic). Escape hatches: `experimental.turbopackUseBuiltinBabel: false` makes Turbopack ignore config files; `experimental.forceSwcTransforms: true` does the same on webpack.
    **Gain** SWC is "17x faster than Babel" per file (vendor); the build-level gain is unmeasured. **Risk** on Turbopack (16+) Babel runs **in addition to** SWC on files outside `node_modules`, in Node child processes. On webpack, a Babel config drops SWC entirely. Babel-only plugins (macros, istanbul coverage) stop applying, so keep them in a separate coverage build.
@@ -90,7 +90,7 @@ Checked 2026-11-09 against the docs, the release posts and the source at tag `v1
 - **15.0:** `outputFileTracingRoot/Includes/Excludes` moved out of `experimental` (the old keys warn). `outputFileTracing: false` was removed, so tracing is always on. `swcMinify` was removed. `serverComponentsExternalPackages` → `serverExternalPackages`; `bundlePagesExternals` → `bundlePagesRouterDependencies`.
 - **≤15:** `next build` lints and uses webpack. Turbopack builds were experimental in 15.3 (`--turbopack`) and beta in 15.5. 15.5 canary's `experimental.turbopackPersistentCaching` is now `turbopackFileSystemCacheForDev`/`…ForBuild`; the old keys stop the build with a rename hint (source).
 - **16.0 (2025-10-21):**
-  - Turbopack is the default bundler (opt out with `--webpack`), and a `webpack` config fails a plain build.
+  - Turbopack is the default bundler (opt out with `--webpack`), and a `webpack` config with no `turbopack` config fails a plain build.
   - `experimental.turbopack` → `turbopack`; `experimental.reactCompiler` → `reactCompiler`.
   - A Babel config auto-enables Babel on Turbopack (before 16 it was a hard error).
   - `next lint` and the `eslint` key were removed, and the build no longer lints.

@@ -1,4 +1,4 @@
-# CI caching reference: GitHub Actions first, GitLab/CircleCI mapped (fact-checked 2026-11-09)
+# CI caching reference: GitHub Actions first, GitLab/CircleCI mapped (fact-checked 2026-11-09, re-verified 2026-11-18)
 
 Use when: measurements show restore, install, or build steps among the slowest, or caches miss, go stale, or thrash.
 Covers actions/cache semantics, detection commands, setup-* caches, tool caches, anti-patterns, and fixes.
@@ -8,21 +8,21 @@ Covers actions/cache semantics, detection commands, setup-* caches, tool caches,
 ---
 
 ## 0. Version snapshot (check again with `gh api repos/<o>/<r>/releases/latest`)
-| Action | Latest as of 2026-11-09 | Notes |
+| Action | Latest as of 2026-11-18 | Notes |
 |---|---|---|
-| actions/cache | **v6.1.0** (2026-06-26) | v6.0.0 (2026-06-23) is the ESM build. v5.0.0 (2025-12-11) moved to Node 24 and needs runner ≥ 2.327.1. v5.0.2 stopped retrying HTTP 429 on save. v6.1.0 and v5.1.0 log a warning instead of failing on a read-only token ([releases](https://github.com/actions/cache/releases)) |
-| actions/setup-node | v7.1.0 | v7.0.0 (2026-07-14) added the `cache-primary-key`/`cache-matched-key` outputs. v7.1.0 bundles `@actions/cache` 6.2.0 ([releases](https://github.com/actions/setup-node/releases)) |
-| setup-python / setup-go / setup-java | v7.1.0 / v7.0.0 / v6.2.0 | see the release pages |
+| actions/cache | **v6.1.0** (2026-06-26) | v6.0.0 (2026-06-23) is the ESM build. v5.0.0 (2025-12-11) moved to Node 24 and needs runner ≥ 2.327.1. v5.0.2 stopped retrying HTTP 429 on save. v6.1.0 and v5.1.0 report a save blocked by a read-only token as a `cache write denied` warning (the job did not fail before either; older versions logged a generic `Unable to reserve cache … another job may be creating this cache` line) ([releases](https://github.com/actions/cache/releases)) |
+| actions/setup-node | v7.1.0 | v7.0.0 (2026-07-14) added the `cache-primary-key`/`cache-matched-key` outputs. v7.1.0 bundles `@actions/cache` 6.3.0 ([releases](https://github.com/actions/setup-node/releases)) |
+| setup-python / setup-go / setup-java | v7.1.0 / v7.1.0 / v6.3.0 | see the release pages |
 | gradle/actions | v6.4.1 | |
-| pnpm/setup / pnpm/action-setup | v3.1.2 / v6.1.1 | both maintained |
+| pnpm/setup / pnpm/action-setup | v3.2.0 / v6.1.1 | both maintained |
 | astral-sh/setup-uv | v10.3.3 | |
 
 Docker action versions: see [stack/docker.md](stack/docker.md).
 
 **Old actions/cache pins**
-- Versions below **4.2.0 / 3.4.0** fail outright since the legacy cache service shut down on 2025-02-01 ([README](https://github.com/actions/cache)). The floating `@v3` and `@v4` tags resolve to working versions.
+- Versions below **4.2.0 / 3.4.0** fail outright: the deprecated versions were retired on 2025-03-01 and the legacy cache service was switched off on 2025-04-15 ([announcement](https://github.com/actions/cache/discussions/1510), [changelog](https://github.blog/changelog/2025-03-20-notification-of-upcoming-breaking-changes-in-github-actions/)). The floating `@v3` and `@v4` tags resolve to working versions.
 - `@v4` declares `node20` and v3.5.0 declares `node16`. They still run, because hosted runners have run JS actions on Node 24 by default since 2026-06-16. The Node 20 opt-out (`ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`) ended on 2026-09-23 ([deprecation changelog](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/), [removal](https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-in-github-actions)).
-- Upgrade to v6 anyway. Older pins miss the read-only and cache-mode handling described in §1.4.
+- Upgrade to v6 anyway. Pins below v5.1.0 miss the read-only (`cache write denied`) handling described in §1.4. No tagged release, `@v6` included, honors `ACTIONS_CACHE_MODE` yet.
 
 ---
 
@@ -52,7 +52,7 @@ Docker action versions: see [stack/docker.md](stack/docker.md).
 ### 1.2 Immutability and saving
 - Entries are immutable. Changed contents need a new key. On an exact hit the post step logs `Cache hit occurred on the primary key K, not saving cache.` ([saveImpl.ts](https://github.com/actions/cache/blob/main/src/saveImpl.ts)).
 - The combined action saves in a post step with `post-if: success()`, so **a failed job saves nothing** ([action.yml](https://github.com/actions/cache/blob/main/action.yml)).
-- `save-always` is deprecated ("does not work as intended"). Use `actions/cache/save` with `if: always() && steps.<restore>.outputs.cache-hit != 'true'` instead ([save README](https://github.com/actions/cache/blob/main/save/README.md)).
+- `save-always` is deprecated ("does not work as intended", [action.yml](https://github.com/actions/cache/blob/main/action.yml)). Use `actions/cache/save` with `if: always() && steps.<restore>.outputs.cache-hit != 'true'` instead ([save README](https://github.com/actions/cache/blob/main/save/README.md)).
 - For caches that grow without their inputs changing, use key `…-${{ github.run_id }}` plus a `restore-keys` prefix. This writes one new entry per run, which costs quota ([tips](https://github.com/actions/cache/blob/main/tips-and-workarounds.md)).
 - The toolkit **builds the tar archive before reserving the key** ([cache.ts](https://github.com/actions/toolkit/blob/main/packages/cache/src/cache.ts)). A save that is denied or loses a race has already paid the archive time.
 
@@ -83,7 +83,7 @@ Docker action versions: see [stack/docker.md](stack/docker.md).
 - **`ACTIONS_CACHE_MODE`:**
   - The runner exports the effective mode. `@actions/cache` **5.2.0 / 6.2.0+** skips the restore or save cleanly and logs `Cache save skipped: the effective cache-mode 'read' does not permit writes.` ([toolkit RELEASES](https://github.com/actions/toolkit/blob/main/packages/cache/RELEASES.md)).
   - **actions/cache v6.1.0 (and `@v6`) still bundles toolkit 6.1.0.** The 6.2.0 bump was merged to `main` on 2026-07-15 but is untagged. With `@v6`, a save under `read` therefore builds the archive, then logs `Failed to save: … cache write denied: …`.
-  - setup-node v7.1.0 bundles 6.2.0.
+  - setup-node v7.1.0 bundles 6.3.0.
 
 ### 1.5 Limits, eviction, rate limits
 - **10 GB per repo free.** Entries not accessed for 7 days are removed. Over the limit, the new entry is saved and entries are evicted by last access, oldest first ([docs](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)).
@@ -104,7 +104,7 @@ Docker action versions: see [stack/docker.md](stack/docker.md).
 W=.github/workflows
 grep -rnE 'actions/cache(/restore|/save)?@|cache:|cache-dependency-path|package-manager-cache|enable-cache|cache-read-only|cache-from|cache-to|setup-gradle|cache-mode|restore-keys|save-always' $W
 grep -rnE 'npm (ci|install)|pnpm i(nstall)?|yarn( install)?$|bun install|pip install|uv sync|poetry install|playwright install|gradlew?|mvn|docker (build|buildx)|next build|turbo run|nx (run|affected)|tsc|eslint|vitest|jest' $W
-grep -rnE 'actions/cache(/\w+)?@(v[12]\b|v3\.[0-3]\.|v4\.[01]\.)' $W   # broken since 2025-02-01
+grep -rnE 'actions/cache(/\w+)?@(v[12]\b|v3\.[0-3]\.|v4\.[01]\.)' $W   # broken since 2025-03-01
 ```
 Flag these:
 - Install/build commands in a job with no cache.
@@ -118,7 +118,7 @@ Flag these:
 ### 2.2 Log signatures (`gh run view <id> --log`, or `gh api repos/{owner}/{repo}/actions/jobs/<job_id>/logs`)
 | Line | Meaning |
 |---|---|
-| `Cache hit for: K` / `Cache hit for restore-key: K` | Exact or partial hit. Logged by toolkit ≥ 4.0.4, i.e. actions/cache ≥ 4.2.4 ([toolkit RELEASES](https://github.com/actions/toolkit/blob/main/packages/cache/RELEASES.md)) |
+| `Cache hit for: K` / `Cache hit for restore-key: K` | Exact or partial hit. Told apart only by toolkit ≥ 4.0.4, i.e. actions/cache ≥ 4.2.4; toolkit 4.0.0–4.0.3 (actions/cache 4.2.0–4.2.3 and 3.4.0) logs `Cache hit for: <primary key>` for every hit, restore-key matches included ([toolkit RELEASES](https://github.com/actions/toolkit/blob/main/packages/cache/RELEASES.md)) |
 | `Cache restored from key: K` | Restore done (actions/cache and setup-node) |
 | `Cache not found for input keys: …` / `<pm> cache is not found` | Miss (actions/cache / setup-node, [cache-restore.ts](https://github.com/actions/setup-node/blob/main/src/cache-restore.ts)) |
 | `Cache Size: ~N MB (B)` | Archive size: input to the "too big" check |
@@ -185,14 +185,14 @@ How Docker `type=gha` entries appear in this list: see [stack/docker.md](stack/d
   - `cache-mode: read` on PR-only workflows. This also blocks the setup-* saves, but with toolkit < 6.2 the archive is still built before the denial (§1.4).
   - setup-java v6 `cache-read-only: true`.
   - setup-gradle, which by default writes only from the default branch ([setup-gradle](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md)).
-  - pnpm/setup `save-cache: false`.
+  - pnpm/setup `save-cache: false` (store only: the lockfile-verification cache and, since v3.2.0, the pnpm executable cache are still saved).
   - setup-uv `save-cache: false`.
   - setup-node has no save toggle. Use `package-manager-cache: false` plus a manual `actions/cache/restore` ([advanced usage](https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md)).
 - Preconditions: the default branch must run the job on `push` or `schedule`, otherwise nothing seeds the cache.
 - Gain: main's hit rate recovers on repos near quota. *Typical, unmeasured.*
 - Risk: PRs that change the lockfile get only a partial restore.
 
-**B. Delete PR caches on close.** Adapted from the [manage-caches docs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manage-caches). Fork PRs need `pull_request_target`, and its security caveats apply.
+**B. Delete PR caches on close.** Adapted from the [manage-caches docs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manage-caches). Fork PRs need `pull_request_target`, and its security caveats apply. From 2026-12-02 public repos block `pull_request_target` by default unless an Actions event policy allows it ([changelog](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2/)).
 ```yaml
 on: { pull_request: { types: [closed] } }
 permissions: { actions: write }
@@ -276,7 +276,7 @@ Per-tool paths, keys and restore order are in the stack files, each under "Cache
 12. Playwright browser-cache keying and `install-deps`: see [stack/playwright.md](stack/playwright.md) Cache paths.
 13. ESLint `--cache` strategy and typed rules in CI: see [stack/lint.md](stack/lint.md) L1.
 14. Writing caches from `pull_request_target`/`issue_comment` (`cache-mode: write`), or release/publish jobs restoring shared caches. This is cache poisoning: "Cache contents are not signed or verified" ([docs](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)). **Fix:** `cache-mode: none` or a cold install for release jobs.
-15. `actions/cache@v1/v2`, pins below `v3.4.0`/`v4.2.0` (fail since 2025-02-01), or `save-always: true` (deprecated, broken).
+15. `actions/cache@v1/v2`, pins below `v3.4.0`/`v4.2.0` (fail since 2025-03-01), or `save-always: true` (deprecated, broken).
 
 ---
 
