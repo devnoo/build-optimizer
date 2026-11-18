@@ -22,7 +22,7 @@ Works with any agent the [skills CLI](https://github.com/vercel-labs/skills) sup
 
 Ask your agent: *"CI is slow, optimize the build"*, or invoke `optimize-build` by name.
 
-You get one report: a time budget per workflow, job and step, then findings ranked by wall-clock seconds saved, each marked *measured* or *expected*. Nothing is changed in your repo unless you ask.
+You get one report: a time budget per workflow, job and step, a pick-up list of the 5 findings to do first, and every finding ranked by wall-clock seconds saved, each marked *measured* or *expected*. Nothing is changed in your repo unless you ask.
 
 ## What it covers
 

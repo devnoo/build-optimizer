@@ -186,7 +186,17 @@ Keep three numbers apart — they answer different questions: **PR wall-clock** 
 **billed minutes** (cost), **work avoided** (skipped runs/jobs/legs). Mark every saving as *measured*
 or *expected*; never present an expected number as measured.
 
-In chat: the top 3 findings, one line each, plus the file link. Do not apply fixes unless asked. When
+**Pick-up list.** Above the full table, and again in chat with the file link, give the **5 findings to
+pick up first, in the order to do them**. Fewer if fewer survived. Choose and order them like this:
+
+1. Critical-path seconds first, counted after the recompute above, then billed minutes per day.
+2. At similar savings, measured before expected and small effort before large.
+3. Leave out a finding that is only an alternative to an earlier pick.
+
+Each line states what to change and where (`target`), the saving (seconds, billed minutes per day, or
+both), measured or expected, the effort, and "needs your OK" when a guardrail asks for a decision.
+
+Do not apply fixes unless asked. When
 asked, apply one finding per branch and re-measure after caches warm (≥ 3 runs). For trigger and
 concurrency changes, prove them live on a non-protected branch: two quick pushes (cancel works), an
 ignored-path-only push (heavy jobs skip). The first push of a new branch is not a valid path-filter test.
