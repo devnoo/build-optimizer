@@ -41,4 +41,9 @@ expect "with space" "go"
 expect empty ""
 expect nested "node-pm go rust"
 
+# The root config must be in the evidence even when nested ones sort first alphabetically.
+mk order apps/a/turbo.json; mk order apps/b/turbo.json; mk order apps/c/turbo.json; mk order turbo.json
+ev=$(bash "$SCRIPT" "$TMP/order" | awk -F'\t' '$1=="turbo"{print $3}')
+case "$ev" in turbo.json,*) echo "ok   order: root config listed first" ;; *) echo "FAIL order: evidence was '$ev'"; fail=1 ;; esac
+
 exit $fail

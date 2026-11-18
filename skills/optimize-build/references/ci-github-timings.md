@@ -32,7 +32,7 @@ gh api repos/OWNER/REPO/actions/workflows --jq '.workflows[] | [.id,.name,.path,
 
 Sources: [rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), [workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs).
 
-- **Secondary limits.** At most 100 concurrent requests and 900 points/min on REST. On 403 or 429: if there is a `retry-after` header, wait that long. If `x-ratelimit-remaining` is 0, wait until `x-ratelimit-reset`. Otherwise wait at least 1 min and back off exponentially ([source](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)). Fetch sequentially.
+- **Secondary limits.** At most 100 concurrent requests and 900 points/min on REST. On 403 or 429: if there is a `retry-after` header, wait that long. If `x-ratelimit-remaining` is 0, wait until `x-ratelimit-reset`. Otherwise wait at least 1 min and back off exponentially ([source](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)). Fetch sequentially. A 5xx in the middle of `gh api --paginate` can end the listing early without an error (observed 2026-11-18 on gh 2.105.0: a 502 left 200 of 1,161 runs). Compare what you got with `total_count` from the first page and fetch again on a mismatch.
 - **Budget.** Timings cost 1 + N × ceil(jobs/100) calls, so 50 runs with 25 jobs each is about 51 calls. Logs add 1 call per job, so fetch them only for the top jobs. Add `gh api --cache 1h` while you iterate.
 - **Retention.** The default is 90 days. Public repos can set 1–90 days and private repos 1–400 ([docs](https://docs.github.com/en/organizations/managing-organization-settings/configuring-the-retention-period-for-github-actions-artifacts-and-logs-in-your-organization)). Since 2026-10-01 the same setting is meant to delete **runs, checks and statuses** too. Before that they were kept for 400+ days, and the change is not retroactive ([changelog 2026-08-27](https://github.blog/changelog/2026-08-27-actions-retention-will-cover-checks-workflow-runs-and-statuses)). Observed 2026-11-09: vitest and cli/cli still listed runs from 2026-07-30, more than 90 days old, along with their jobs. Logs for those runs returned **HTTP 410**. Treat logs as gone after the retention period and run metadata as possibly gone. Report artifacts often set a shorter `retention-days`, so download them on your first pass.
 - **Forks.** Runs live in the repo that executed them, and PRs from forks run in the base repo. Check `gh run list -R FORK -L 5`. If the fork's history is empty or thin, measure upstream. Runs from first-time contributors sit in `action_required` until someone approves them ([runs API](https://docs.github.com/en/rest/actions/workflow-runs)). Keep them out of queue stats.
@@ -47,7 +47,7 @@ gh run list -R O/R -w ci.yml -b main -s success -e push -L 50 --created '>=2026-
 
 - The REST equivalent is `GET /repos/{o}/{r}/actions/workflows/{file-or-id}/runs?branch=&status=success&event=push&per_page=100`. `per_page` has a maximum of 100. With any of `actor, branch, check_suite_id, created, event, head_sha, status` the endpoint returns **at most 1,000 results**. For longer windows, slice by `created=2026-10-01..2026-10-15` ([runs API](https://docs.github.com/en/rest/actions/workflow-runs)).
 - **Use attempt 1 only, via `/attempts/1/jobs`.** Observed on vitest, ruff and vite after "re-run failed jobs": the attempt-N job list re-lists jobs that already passed. They get a **new job id, `run_attempt: N` and a new `created_at`** but keep the **original `started_at`/`completed_at`**, so `started_at < created_at` and queue time comes out negative. `?filter=all` returns every attempt. The default `latest` returns only the newest attempt ([jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)). Full re-runs were not observed. Count runs with `run_attempt > 1` separately as a flakiness signal.
-- **Keep events apart.** Use `push` on the default branch as the baseline. `pull_request` is what developers actually wait on, and path filters, `if:` and queueing can all differ there. On vitest, push runs on main mostly queued 2–3 s per job, but job queues in one PR run (42643021918) ranged from 2 s to almost 6 min (median about 3 min). Merge queues run as `merge_group`. `schedule` and `workflow_dispatch` usually run different job sets.
+- **Keep events apart.** Sample `pull_request` and default-branch `push` separately. `pull_request` is what developers wait on and gives the PR wall-clock; `push` gives the delivery time. Path filters, `if:`, job sets and queueing can all differ between them. On vitest, push runs on main mostly queued 2–3 s per job, but job queues in one PR run (42643021918) ranged from 2 s to almost 6 min (median about 3 min). Merge queues run as `merge_group`. `schedule` and `workflow_dispatch` usually run different job sets.
 - **Sample size.** Get at least 10 data points per job: 20–50 runs, or 14–30 days. Report p50 and p90, never the mean of a few runs. Jobs gated by `if:` or path filters will have a lower n, so always print n.
 - **Regression hunt:** compare the p50 of the last 10 runs with the p50 of the 10 runs before them.
 
@@ -70,18 +70,19 @@ gh run list -R O/R -w ci.yml -b main -s success -e push -L 50 --created '>=2026-
 
 ```bash
 #!/usr/bin/env bash
-# collect.sh OWNER/REPO WORKFLOW_FILE [N<=100] > jobs.ndjson   (one line per successful attempt-1 job)
+# collect.sh OWNER/REPO WORKFLOW_FILE [N<=100] [EVENT] [BRANCH] > jobs.ndjson   (one line per successful attempt-1 job)
+# EVENT defaults to push. BRANCH defaults to the default branch for push, and to every branch for other events.
 set -euo pipefail
-REPO=$1 WF=$2 N=${3:-30}
-BRANCH=$(gh api "repos/$REPO" --jq .default_branch)
-gh api "repos/$REPO/actions/workflows/$WF/runs?branch=$BRANCH&status=success&event=push&exclude_pull_requests=true&per_page=$N" \
-  --jq '.workflow_runs[] | select(.run_attempt == 1) | [.id, .head_sha] | @tsv' |
-while IFS=$'\t' read -r RUN SHA; do
+REPO=$1 WF=$2 N=${3:-30} EVENT=${4:-push} BRANCH=${5:-}
+if [ -z "$BRANCH" ] && [ "$EVENT" = push ]; then BRANCH=$(gh api "repos/$REPO" --jq .default_branch); fi
+gh api "repos/$REPO/actions/workflows/$WF/runs?status=success&event=$EVENT&exclude_pull_requests=true&per_page=$N${BRANCH:+&branch=$BRANCH}" \
+  --jq '.workflow_runs[] | select(.run_attempt == 1) | [.id, .head_sha, .event] | @tsv' |
+while IFS=$'\t' read -r RUN SHA EV; do
   gh api --paginate "repos/$REPO/actions/runs/$RUN/attempts/1/jobs?per_page=100" |
-  jq -c --argjson run "$RUN" --arg sha "$SHA" '
+  jq -c --argjson run "$RUN" --arg sha "$SHA" --arg event "$EV" '
     def t: if . == null then null else fromdateiso8601 end;
     .jobs[] | select(.conclusion == "success") | {
-      run: $run, sha: $sha, job: .name, labels: (.labels | join(",")),
+      run: $run, sha: $sha, event: $event, job: .name, labels: (.labels | join(",")),
       created: .created_at, started: .started_at, completed: .completed_at,
       queue_s: ((.started_at|t) - (.created_at|t)),
       exec_s:  ((.completed_at|t) - (.started_at|t)),
@@ -90,7 +91,7 @@ while IFS=$'\t' read -r RUN SHA; do
 done
 ```
 
-`gh api --jq` has no `--arg`, so pipe into standalone `jq` when you need variables. Always pass `--paginate`, because a matrix can expand to 256 jobs per run ([limits](https://docs.github.com/en/actions/reference/limits)). The `run_attempt == 1` filter drops runs that were re-run, which biases the sample toward non-flaky runs. Report how many runs it dropped.
+`gh api --jq` has no `--arg`, so pipe into standalone `jq` when you need variables. Always pass `--paginate`, because a matrix can expand to 256 jobs per run ([limits](https://docs.github.com/en/actions/reference/limits)). The `run_attempt == 1` filter drops runs that were re-run, which biases the sample toward non-flaky runs. Report how many runs it dropped. Run it once per event you sample (`push`, `pull_request`, `merge_group`, or what else triggers the workflow: `workflow_run`, `release`, `repository_dispatch`) and keep one file per event; a workflow that never runs on `push` returns nothing with the default.
 
 ## 4. Aggregate (p50/p90 per job and step)
 
@@ -98,6 +99,8 @@ done
 # agg.jq — jq -s -r -f agg.jq jobs.ndjson   (floor-rank percentiles, index floor((n-1)*p), at most one rank below nearest-rank; trust n >= 5)
 def pct(p): sort | .[((length - 1) * p | floor)];
 def stats(f): map(f) | {n: length, p50: pct(0.5), p90: pct(0.9)};
+def norm: gsub("[0-9a-f]{40}"; "<sha>") | gsub("v?[0-9]+\\.[0-9]+\\.[0-9]+[-+.0-9A-Za-z]*"; "<ver>");   # names that change every run
+map(.job |= norm) |
 ( group_by(.job) | map({k: .[0].job, x: stats(.exec_s), q: stats(.queue_s)})
   | sort_by(-.x.p50)[:15][] | "JOB\t\(.x.p50)s\tp90 \(.x.p90)s\tqueue p50 \(.q.p50)s\tn=\(.x.n)\t\(.k)" ),
 ( [ .[] | .job as $j | .steps[] | {k: "\($j) :: \(.name | gsub("@[0-9a-f]{40}"; ""))", s} ]
@@ -105,7 +108,7 @@ def stats(f): map(f) | {n: length, p50: pct(0.5), p90: pct(0.9)};
   | sort_by(-.x.p50)[:20][] | "STEP\t\(.x.p50)s\tp90 \(.x.p90)s\tn=\(.x.n)\t\(.k)" )
 ```
 
-Real output from vitest CI, 6 runs: `JOB 713s p90 762s queue p50 3s n=6 Browsers: rest 2/2, node-24, windows-latest` and `STEP 626s … :: Test Browser (playwright)`. Test time dominates and queue time is negligible, so the next lane is test sharding and balance, not caching. Keep the `gsub`: steps that run a SHA-pinned action are named `Run owner/repo/.github/actions/x@<40-hex>`, and without stripping the SHA they never group across commits.
+Real output from vitest CI, 6 runs: `JOB 713s p90 762s queue p50 3s n=6 Browsers: rest 2/2, node-24, windows-latest` and `STEP 626s … :: Test Browser (playwright)`. Test time dominates and queue time is negligible, so the next lane is test sharding and balance, not caching. Keep the `gsub`: steps that run a SHA-pinned action are named `Run owner/repo/.github/actions/x@<40-hex>`, and without stripping the SHA they never group across commits. `norm` does the same for job names: a release leg such as `build (app, 0.7.119)` would otherwise be an n=1 row per run. Drop the `<ver>` rule when a matrix compares three-part versions on purpose.
 
 | Signal | Meaning | Next lane |
 |---|---|---|
@@ -132,7 +135,7 @@ def t: fromdateiso8601;
   ( walk($J | max_by(.e)) | reverse[] | "  +\(.c - $t0)s queue=\(.queue_s)s exec=\(.exec_s)s  \(.job)" )
 ```
 
-Vitest run 42648475956: `wall_clock_s=799 compute_s=6243 jobs=22`, about 7.8× parallelism, with path `Diff (6s) → Browsers: rest 2/2, windows-latest (787s)`. Ruff run 42644367761: `wall 785 compute 8072 jobs 37`, with path `Determine changes (25s) → benchmarks instrumented ty (build) (252s) → … (simulation: micro-2) (501s)`. A serial build → bench chain is the target there. If two dependencies finish in the same second the walk may pick the wrong one, so confirm with 5b. Cross-check: on run 42648475956, `GET …/runs/{id}/timing` returned `run_duration_ms: 800000`, matching the computed wall-clock.
+Vitest run 42648475956: `wall_clock_s=799 compute_s=6243 jobs=22`, about 7.8× parallelism, with path `Diff (6s) → Browsers: rest 2/2, windows-latest (787s)`. Ruff run 42644367761: `wall 785 compute 8072 jobs 37`, with path `Determine changes (25s) → benchmarks instrumented ty (build) (252s) → … (simulation: micro-2) (501s)`. A serial build → bench chain is the target there. If two dependencies finish in the same second the walk may pick the wrong one, and on one real repo it missed an edge in 1 of 20 runs. Run it over every sampled run, take the most frequent path, and treat 5b as the authority when the two disagree. Cross-check: on run 42648475956, `GET …/runs/{id}/timing` returned `run_duration_ms: 800000`, matching the computed wall-clock.
 
 **5b. Planned DAG from YAML (slack and what-if).** The API returns display names only, so map them back to job ids first.
 
@@ -238,7 +241,9 @@ for f in [p for a in sys.argv[1:] for p in glob.glob(a,recursive=True)]:
 
 Sources: [Vitest reporters](https://vitest.dev/guide/reporters) (the JSON is Jest-compatible; use blob + `--merge-reports` for shards), [Jest formatTestResults](https://github.com/jestjs/jest/blob/main/packages/jest-test-result/src/formatTestResults.ts), [Playwright JSON types](https://github.com/microsoft/playwright/blob/v1.65.0/packages/playwright/types/testReporter.d.ts). Merge sharded reports before you rank files. Some reporters nest `<testsuite>` elements, and `iter()` counts nested ones twice.
 
-If no reports are uploaded, propose this one-time addition. It unblocks the test deep-dive:
+An HTML-only report (Playwright's `html` reporter, a coverage site) has no stable format to parse, and the job log then has no per-test lines either. Do not write a parser. Get durations from a local run with a machine-readable reporter (`npx playwright test --reporter=json`, `--reporter=junit`), or from CI after the addition below.
+
+If no machine-readable reports are uploaded, propose this one-time addition. It unblocks the test deep-dive:
 
 ```yaml
 - run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=reports/junit.xml
@@ -264,7 +269,7 @@ If no reports are uploaded, propose this one-time addition. It unblocks the test
    hyperfine -S --runs 3 --prepare 'rm -rf node_modules/.cache dist' --export-json cold.json 'npm run build'
    jq '.results[] | {command, mean: .summary.time_wall_clock.mean}' warm.json
    ```
-   hyperfine 2.0.0 (2026-10-07) runs commands **without a shell by default**. `-S` is now an alias for `--shell=default` and restores `sh`, which you need for `&&`, pipes and `$VAR`. `--prepare/--setup/--conclude/--cleanup` always run in a shell. The JSON moved to schema v2: `results[].mean` became `results[].summary.time_wall_clock.mean` ([v2.0.0](https://github.com/sharkdp/hyperfine/releases/tag/v2.0.0)). **On 1.x**, drop `-S` (in 1.x it takes a shell argument, and a shell is already the default) and read `.results[].mean`. Check the version with `hyperfine --version`.
+   hyperfine 2.0.0 (2026-10-07) runs commands **without a shell by default**. `-S` is now an alias for `--shell=default` and restores `sh`, which you need for `&&`, pipes and `$VAR`. `--prepare/--setup/--conclude/--cleanup` always run in a shell. The JSON moved to schema v2: `results[].mean` became `results[].summary.time_wall_clock.mean` ([v2.0.0](https://github.com/sharkdp/hyperfine/releases/tag/v2.0.0)). **On 1.x**, drop `-S` (in 1.x it takes a shell argument, and a shell is already the default) and read `.results[].mean`. Check the version with `hyperfine --version`. Without hyperfine, time three runs and take the middle one: `for i in 1 2 3; do /usr/bin/time -p sh -c 'npm run build' 2>&1 | awk '/^real/{print $2}'; done | sort -n | sed -n 2p`.
 3. Approximate the runner. `ubuntu-latest` has 2 vCPU / 8 GB in private repos and 4 vCPU / 16 GB in public ones. `macos-latest` is 3 vCPU (M1) / 7 GB ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)). For example: `docker run --rm --cpus=2 --memory=8g -v "$PWD":/w -w /w node:24 …`.
 4. Caveats: a warm page cache and local package caches make local runs faster than a fresh VM, laptop cores are faster, and CI adds checkout, setup and cache restore/save. Trust **rankings and ratios**, not absolute seconds. Take at least 3 runs and report cold and warm separately.
 
@@ -281,7 +286,7 @@ If no reports are uploaded, propose this one-time addition. It unblocks the test
 
 ## 10. Adapter contract (CI-agnostic seam)
 
-`agg.jq`, `critpath.jq` and `dag.jq` read only the §3 NDJSON shape (`run, sha, job, labels, created, started, completed, queue_s, exec_s, steps[{name,s}]`). A new CI only has to emit that shape, with `created` meaning **eligible** (dependencies satisfied).
+`agg.jq`, `critpath.jq` and `dag.jq` read only the §3 NDJSON shape (`run, sha, event, job, labels, created, started, completed, queue_s, exec_s, steps[{name,s}]`). A new CI only has to emit that shape, with `created` meaning **eligible** (dependencies satisfied).
 
 ```ts
 type Iso = string;

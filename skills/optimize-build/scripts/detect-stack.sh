@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Detect the build/test technologies in a repo so optimize-build loads only the matching stack references.
 # Usage: detect-stack.sh [repo-dir]
-# Output: one line per technology: <key>\t<stack reference or "-">\t<evidence (up to 3 paths)>
+# Output: one line per technology: <key>\t<stack reference or "-">\t<evidence (the 3 shallowest paths)>
 # A "-" reference means: detected, but no stack file yet — use the generic lane references.
 set -euo pipefail
 
@@ -17,6 +17,10 @@ else
       -not -path '*/build/*' -not -path '*/dist/*' -not -path '*/.gradle/*' | sed 's|^\./||')
 fi
 
+shallow3() { # stdin: paths -> the 3 shallowest, comma-joined (root configs first)
+  awk '{ n = gsub("/", "/"); print n "\t" $0 }' | sort -n -s -k1,1 | cut -f2- | head -3 | paste -sd, -
+}
+
 emit() { # key evidence
   local ref="-"
   if [ -n "$STACK_DIR" ] && [ -f "$STACK_DIR/$1.md" ]; then ref="references/stack/$1.md"; fi
@@ -25,21 +29,21 @@ emit() { # key evidence
 
 by_path() { # key ERE-on-path
   local m
-  m=$(printf '%s\n' "$ALL" | grep -E "$2" | head -3 | paste -sd, - || true)
+  m=$(printf '%s\n' "$ALL" | grep -E "$2" | shallow3 || true)
   if [ -n "$m" ]; then emit "$1" "$m"; fi
 }
 
 by_dep() { # key npm-package — any package.json that lists it
   local m
   m=$(printf '%s\n' "$ALL" | grep -E '(^|/)package\.json$' | tr '\n' '\0' \
-      | xargs -0 grep -l -E "\"$2\"[[:space:]]*:" 2>/dev/null | head -3 | paste -sd, - || true)
+      | xargs -0 grep -l -E "\"$2\"[[:space:]]*:" 2>/dev/null | shallow3 || true)
   if [ -n "$m" ]; then emit "$1" "$m (dep $2)"; fi
 }
 
 by_ci() { # key ERE-on-workflow-content
   local m
   m=$(printf '%s\n' "$ALL" | grep -E '^\.github/workflows/[^/]+\.ya?ml$' | tr '\n' '\0' \
-      | xargs -0 grep -l -E "$2" 2>/dev/null | head -3 | paste -sd, - || true)
+      | xargs -0 grep -l -E "$2" 2>/dev/null | shallow3 || true)
   if [ -n "$m" ]; then emit "$1" "$m (ci)"; fi
 }
 

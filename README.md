@@ -43,7 +43,7 @@ Timings come from GitHub Actions. Other CIs plug in through the adapter contract
 ## Requirements
 
 - `git`, `jq`, and an authenticated `gh` for GitHub Actions timings.
-- In Claude Code the investigation fans out with the Workflow tool: one investigator and one skeptic per hotspot, plus a cache audit and a waste audit. Other agents run the same prompts in sequence.
+- In Claude Code the investigation fans out with the Workflow tool: one investigator and one skeptic per item, where the items are up to 6 hotspots plus a cache audit and a waste audit. That is at most 16 agents, at roughly 0.2 M tokens each; the skill states the count before it starts. Other agents run the same prompts in sequence.
 
 ## How the references are sourced
 
@@ -60,7 +60,7 @@ Build tools move fast. Treat a reference older than a few months as a starting p
 1. Add a `by_path` or `by_dep` line to [`scripts/detect-stack.sh`](skills/optimize-build/scripts/detect-stack.sh).
 2. Write `references/stack/<key>.md` in the shape of the existing ones: Measure, Checks, Cache paths, Version traps, Sources.
 3. Add the key to `LANE_STACK` in [`WORKFLOW.md`](skills/optimize-build/WORKFLOW.md).
-4. Add a fixture to `tests/detect-stack.test.sh` and run `bash tests/detect-stack.test.sh`.
+4. Add a fixture to `tests/detect-stack.test.sh` and run the tests: `for t in tests/*.test.sh; do bash "$t"; done`.
 
 ## License
 
